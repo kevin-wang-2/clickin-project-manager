@@ -14,7 +14,8 @@ export type CharOp =
 
 export type SceneOp =
   | { op: "upsert"; scene: Scene }
-  | { op: "delete"; id: string };
+  | { op: "delete"; id: string }
+  | { op: "reorder"; ids: string[] };
 
 export type ScriptPatch = {
   clientSeq: number;       // monotonic counter from client; server ignores if stale
@@ -82,6 +83,13 @@ export function diffState(
     }
   }
 
+  // Scene reorder detection
+  const retainedPrevScenes = prev.scenes.filter((s) => currSceneIds.has(s.id)).map((s) => s.id);
+  const retainedCurrScenes = curr.scenes.filter((s) => prevSceneMap.has(s.id)).map((s) => s.id);
+  if (retainedPrevScenes.join(",") !== retainedCurrScenes.join(",")) {
+    sceneOps.push({ op: "reorder", ids: curr.scenes.map((s) => s.id) });
+  }
+
   // ── Blocks ───────────────────────────────────────────────────────────────────
   const prevBlockMap = new Map(prev.blocks.map((b) => [b.id, b]));
   const currBlockMap = new Map(curr.blocks.map((b) => [b.id, b]));
@@ -146,7 +154,7 @@ export function requiredPermissions(
   const prevBlockMap = new Map(prevState.blocks.map((b) => [b.id, b]));
 
   if (patch.charOps.length > 0) needed.add("script:metadata");
-  if (patch.sceneOps.length > 0) needed.add("script:metadata");
+  if (patch.sceneOps.some((op) => op.op === "upsert" || op.op === "delete" || op.op === "reorder")) needed.add("script:metadata");
 
   for (const op of patch.blockOps) {
     if (op.op === "insert" || op.op === "delete" || op.op === "reorder") {

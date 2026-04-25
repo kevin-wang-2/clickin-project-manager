@@ -22,7 +22,13 @@ CREATE TABLE IF NOT EXISTS scene (
   production_id TEXT NOT NULL REFERENCES production(id) ON DELETE CASCADE,
   num           TEXT NOT NULL DEFAULT '',
   name          TEXT NOT NULL,
-  sort_order    INTEGER NOT NULL DEFAULT 0
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  parent_id        TEXT REFERENCES scene(id) ON DELETE SET NULL,
+  synopsis         TEXT,
+  action_line      TEXT,
+  music            TEXT,
+  stage_notes      TEXT,
+  expected_duration TEXT
 );
 
 CREATE INDEX IF NOT EXISTS scene_production_idx ON scene(production_id, sort_order);

@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   KeyboardEvent,
   useCallback,
@@ -351,20 +352,23 @@ function TableOfContents({
     <div className="px-8 pt-6 pb-5 border-b border-zinc-100">
       <p className="mb-3 text-[10px] font-bold tracking-widest text-zinc-300 uppercase">目录</p>
       <nav className="flex flex-col gap-0.5">
-        {orderedScenes.map((scene) => (
-          <button
-            key={scene.id}
-            onClick={() => scrollTo(scene.id)}
-            className="flex items-baseline gap-3 rounded-lg px-2 py-1 text-left transition-colors hover:bg-zinc-50 group"
-          >
-            <span className="min-w-[3rem] text-xs font-bold tracking-wider text-zinc-300 group-hover:text-zinc-500">
-              {scene.number || "—"}
-            </span>
-            <span className="text-sm text-zinc-400 group-hover:text-zinc-600">
-              {scene.name || <span className="italic text-zinc-200">未命名</span>}
-            </span>
-          </button>
-        ))}
+        {orderedScenes.map((scene) => {
+          const isSubScene = scene.parentId !== null;
+          return (
+            <button
+              key={scene.id}
+              onClick={() => scrollTo(scene.id)}
+              className={`flex items-baseline gap-3 rounded-lg px-2 py-1 text-left transition-colors hover:bg-zinc-50 group${isSubScene ? " pl-6" : ""}`}
+            >
+              <span className={`min-w-[3rem] text-xs tracking-wider ${isSubScene ? "font-medium text-zinc-300 group-hover:text-zinc-400" : "font-bold text-zinc-400 group-hover:text-zinc-600"}`}>
+                {scene.number || "—"}
+              </span>
+              <span className={`${isSubScene ? "text-xs text-zinc-300 group-hover:text-zinc-500" : "text-sm font-medium text-zinc-500 group-hover:text-zinc-700"}`}>
+                {scene.name || <span className="italic text-zinc-200">未命名</span>}
+              </span>
+            </button>
+          );
+        })}
       </nav>
     </div>
   );
@@ -376,10 +380,12 @@ function SceneRow({
   scene,
   onUpdate,
   onRemove,
+  indent = false,
 }: {
   scene: Scene;
   onUpdate: (id: string, number: string, name: string) => void;
   onRemove: (id: string) => void;
+  indent?: boolean;
 }) {
   const [number, setNumber] = useState(scene.number);
   const [name, setName] = useState(scene.name);
@@ -397,13 +403,13 @@ function SceneRow({
 
   return (
     <tr className="border-b border-zinc-50 last:border-0">
-      <td className="py-1 pr-2 align-middle">
+      <td className={`py-1 pr-2 align-middle${indent ? " pl-4" : ""}`}>
         <input
           value={number}
           onChange={(e) => setNumber(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur(); } }}
-          className="w-14 rounded border border-transparent px-1 py-0.5 text-sm outline-none focus:border-zinc-300"
+          className={`w-14 rounded border border-transparent px-1 py-0.5 text-sm outline-none focus:border-zinc-300${indent ? " text-zinc-400" : ""}`}
           placeholder="编号"
         />
       </td>
@@ -438,7 +444,7 @@ function ScenePanel({
 }: {
   scenes: Scene[];
   productionId: string;
-  onAdd: () => void;
+  onAdd: (parentId?: string) => void;
   onUpdate: (id: string, number: string, name: string) => void;
   onRemove: (id: string) => void;
 }) {
@@ -470,7 +476,9 @@ function ScenePanel({
             </Link>
           </div>
           <div className="overflow-y-auto p-3">
-            {scenes.length > 0 ? (
+            {scenes.length === 0 ? (
+              <p className="mb-2 text-center text-xs text-zinc-300">暂无章节</p>
+            ) : (
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-zinc-100 text-left text-xs text-zinc-400">
@@ -480,21 +488,37 @@ function ScenePanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {scenes.map((s) => (
-                    <SceneRow key={s.id} scene={s} onUpdate={onUpdate} onRemove={onRemove} />
-                  ))}
+                  {scenes.map((s) => {
+                    const isSubScene = s.parentId !== null;
+                    return (
+                      <React.Fragment key={s.id}>
+                        <SceneRow scene={s} onUpdate={onUpdate} onRemove={onRemove} indent={isSubScene} />
+                        {/* After each act row, show an inline "add sub-scene" row */}
+                        {!isSubScene && (
+                          <tr>
+                            <td colSpan={3} className="pt-0 pb-1 pl-5">
+                              <button
+                                onClick={() => onAdd(s.id)}
+                                className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors"
+                              >
+                                + 添加场景
+                              </button>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
-            ) : (
-              <p className="mb-2 text-center text-xs text-zinc-300">暂无章节</p>
             )}
           </div>
           <div className="shrink-0 border-t border-zinc-100 p-3">
             <button
-              onClick={onAdd}
+              onClick={() => onAdd()}
               className="w-full rounded-lg border border-dashed border-zinc-200 py-1.5 text-sm text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-600"
             >
-              + 添加章节
+              + 添加幕
             </button>
           </div>
         </div>
@@ -504,14 +528,29 @@ function ScenePanel({
 }
 
 function SceneHeader({ scene }: { scene: Scene }) {
-  return (
-    <div className="flex select-none items-center gap-3 px-8 py-3">
-      <div className="h-px flex-1 bg-zinc-200" />
-      <div className="flex items-baseline gap-2">
-        <span className="text-xs font-bold tracking-widest text-zinc-400">{scene.number}</span>
-        {scene.name && <span className="text-sm text-zinc-500">{scene.name}</span>}
+  if (scene.parentId === null) {
+    // Act-level: prominent, full-width dividers
+    return (
+      <div className="flex select-none items-center gap-3 px-8 py-4">
+        <div className="h-px flex-1 bg-zinc-300" />
+        <div className="flex items-baseline gap-2.5">
+          <span className="text-xs font-extrabold tracking-widest text-zinc-500">{scene.number}</span>
+          {scene.name && <span className="text-base font-semibold text-zinc-600">{scene.name}</span>}
+        </div>
+        <div className="h-px flex-1 bg-zinc-300" />
       </div>
-      <div className="h-px flex-1 bg-zinc-200" />
+    );
+  }
+  // Sub-scene: lighter, indented
+  return (
+    <div className="flex select-none items-center gap-2 px-8 py-2">
+      <div className="w-6 shrink-0" />
+      <div className="h-px w-3 shrink-0 bg-zinc-150" style={{ backgroundColor: "#e8e8e8" }} />
+      <div className="flex items-baseline gap-2">
+        <span className="text-xs font-bold tracking-widest text-zinc-300">{scene.number}</span>
+        {scene.name && <span className="text-sm text-zinc-400">{scene.name}</span>}
+      </div>
+      <div className="h-px flex-1 bg-zinc-100" />
     </div>
   );
 }
@@ -2399,8 +2438,23 @@ export default function ScriptEditor({
       prev.map((c) => (c.id === charId ? { ...c, name } : c))
     );
 
-  const addScene = () => {
-    setScenes((prev) => [...prev, { id: uid(), number: "", name: "" }]);
+  const addScene = (parentId?: string) => {
+    const newScene: Scene = { id: uid(), number: "", name: "", parentId: parentId ?? null };
+    if (parentId) {
+      setScenes((prev) => {
+        // Insert after the last sub-scene of this parent (or after the parent itself)
+        let insertAfter = prev.findIndex((s) => s.id === parentId);
+        for (let i = insertAfter + 1; i < prev.length; i++) {
+          if (prev[i].parentId === parentId) insertAfter = i;
+          else break;
+        }
+        const next = [...prev];
+        next.splice(insertAfter + 1, 0, newScene);
+        return next;
+      });
+    } else {
+      setScenes((prev) => [...prev, newScene]);
+    }
   };
 
   const updateScene = (id: string, number: string, name: string) => {
@@ -2513,7 +2567,7 @@ export default function ScriptEditor({
               <ScenePanel
                 scenes={scenes}
                 productionId={productionId ?? ""}
-                onAdd={addScene}
+                onAdd={(parentId) => addScene(parentId)}
                 onUpdate={updateScene}
                 onRemove={removeScene}
               />
@@ -2565,6 +2619,7 @@ export default function ScriptEditor({
           <TableOfContents scenes={scenes} blocks={blocks} />
           {(() => {
             const usedSceneIds = new Set(blocks.map((b) => b.sceneId).filter(Boolean));
+            let lastRenderedActId: string | undefined = undefined;
             return blocks.flatMap((block, bIdx) => {
             const prev = bIdx > 0 ? blocks[bIdx - 1] : null;
 
@@ -2604,16 +2659,39 @@ export default function ScriptEditor({
                   const skipped = currentIdx > prevIdx + 1
                     ? scenes.slice(prevIdx + 1, currentIdx).filter((s) => !usedSceneIds.has(s.id))
                     : [];
-                  return (
-                    <>
-                      {skipped.map((s) => (
-                        <div key={`empty-${s.id}`} id={`scene-block-${s.id}`} className="scroll-mt-20">
-                          <SceneHeader scene={s} />
-                        </div>
-                      ))}
-                      {scene && <SceneHeader scene={scene} />}
-                    </>
-                  );
+
+                  const headerEls: React.ReactNode[] = [];
+
+                  // Emit a scene header, inserting parent act header when needed.
+                  const emitHeader = (s: Scene, anchor?: string) => {
+                    if (s.parentId !== null) {
+                      // Sub-scene: ensure its parent act is shown first
+                      if (s.parentId !== lastRenderedActId) {
+                        const act = scenes.find((a) => a.id === s.parentId);
+                        if (act) {
+                          const actAnchor = !usedSceneIds.has(act.id) ? act.id : undefined;
+                          headerEls.push(
+                            <div key={`act-${act.id}`} id={actAnchor ? `scene-block-${actAnchor}` : undefined} className={actAnchor ? "scroll-mt-20" : undefined}>
+                              <SceneHeader scene={act} />
+                            </div>
+                          );
+                          lastRenderedActId = act.id;
+                        }
+                      }
+                    } else {
+                      lastRenderedActId = s.id;
+                    }
+                    headerEls.push(
+                      <div key={`sh-${s.id}`} id={anchor ? `scene-block-${anchor}` : undefined} className={anchor ? "scroll-mt-20" : undefined}>
+                        <SceneHeader scene={s} />
+                      </div>
+                    );
+                  };
+
+                  for (const s of skipped) emitHeader(s, s.id);
+                  if (scene) emitHeader(scene); // block container already has the current scene's anchor
+
+                  return <>{headerEls}</>;
                 })()}
                 <ScriptBlock
                   block={block}

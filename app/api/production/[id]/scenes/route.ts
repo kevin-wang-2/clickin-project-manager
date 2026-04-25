@@ -31,16 +31,35 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   }
 
   const body = await req.json();
-  const number = typeof body.number === "string" ? body.number.trim() : "";
-  const name   = typeof body.name   === "string" ? body.name.trim()   : "";
+  const number   = typeof body.number   === "string" ? body.number.trim()   : "";
+  const name     = typeof body.name     === "string" ? body.name.trim()     : "";
+  const parentId = typeof body.parentId === "string" ? body.parentId        : null;
 
-  getState(id); // ensure cache is warm
-  const newScene = { id: `s${Date.now().toString(36)}`, number, name };
+  const state = getState(id);
+  const newScene = { id: `s${Date.now().toString(36)}`, number, name, parentId };
+
+  // Build a reordered list: insert sub-scene after its parent's last child, or at end for acts
+  const scenes = [...state.scenes];
+  if (parentId) {
+    let insertAfter = scenes.findIndex((s) => s.id === parentId);
+    for (let i = insertAfter + 1; i < scenes.length; i++) {
+      if (scenes[i].parentId === parentId) insertAfter = i;
+      else break;
+    }
+    scenes.splice(insertAfter + 1, 0, newScene);
+  } else {
+    scenes.push(newScene);
+  }
+
   await applyPatch(id, {
     clientSeq: 0,
     blockOps: [],
     charOps: [],
-    sceneOps: [{ op: "upsert", scene: newScene }],
+    sceneOps: [
+      { op: "upsert", scene: newScene },
+      { op: "reorder", ids: scenes.map((s) => s.id) },
+    ],
   });
-  return Response.json({ ok: true, scene: newScene }, { status: 201 });
+  const sceneDetail = { ...newScene, synopsis: "", actionLine: "", music: "", stageNotes: "", expectedDuration: "" };
+  return Response.json({ ok: true, scene: sceneDetail }, { status: 201 });
 }

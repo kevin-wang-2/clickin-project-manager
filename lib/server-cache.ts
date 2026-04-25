@@ -438,10 +438,16 @@ function applySceneOps(entry: CacheEntry, ops: SceneOp[]) {
       else entry.scenes.push(op.scene);
       entry.dirty.scenes.set(op.scene.id, op.scene);
       entry.dirty.deletedSceneIds.delete(op.scene.id);
-    } else {
+    } else if (op.op === "delete") {
       entry.scenes = entry.scenes.filter((s) => s.id !== op.id);
       entry.dirty.deletedSceneIds.add(op.id);
       entry.dirty.scenes.delete(op.id);
+    } else {
+      // reorder
+      const map = new Map(entry.scenes.map((s) => [s.id, s]));
+      entry.scenes = op.ids.map((id) => map.get(id)).filter(Boolean) as typeof entry.scenes;
+      // mark all retained scenes dirty so sort_order is re-persisted
+      for (const s of entry.scenes) entry.dirty.scenes.set(s.id, s);
     }
   }
 }

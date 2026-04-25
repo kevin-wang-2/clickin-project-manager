@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getSceneById, getProductionName } from "@/lib/db";
+import { getProductionMemberContext, getSceneById, getProductionName, type SceneDetail } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import SceneDetail from "@/components/SceneDetail";
+import SceneDetailView from "@/components/SceneDetail";
 
 export default async function SceneDetailPage({
   params,
@@ -27,10 +27,10 @@ export default async function SceneDetailPage({
   if (!name || !scene) redirect(`/production/${id}/script`);
 
   return (
-    <SceneDetail
+    <SceneDetailView
       productionId={id}
       productionName={name}
-      scene={scene}
+      scene={scene as SceneDetail}
       canEdit={canEdit}
     />
   );

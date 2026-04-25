@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getProductionName, listProductionScenes } from "@/lib/db";
+import { getProductionMemberContext, getProductionName, listProductionScenes, listRehearsalMarksByScene } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import ScenesManager from "@/components/ScenesManager";
 
@@ -20,9 +20,10 @@ export default async function ScenesPage({
 
   const canEdit = hasPermission("script:metadata", session.isAdmin, memberRoles, overrides);
 
-  const [name, scenes] = await Promise.all([
+  const [name, scenes, rehearsalMarks] = await Promise.all([
     getProductionName(id),
     listProductionScenes(id),
+    listRehearsalMarksByScene(id),
   ]);
   if (!name) redirect("/");
 
@@ -31,6 +32,7 @@ export default async function ScenesPage({
       productionId={id}
       productionName={name}
       initialScenes={scenes}
+      rehearsalMarks={rehearsalMarks}
       canEdit={canEdit}
     />
   );

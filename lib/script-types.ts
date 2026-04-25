@@ -1,5 +1,5 @@
 export type Character = { id: string; name: string };
-export type Scene = { id: string; number: string; name: string };
+export type Scene = { id: string; number: string; name: string; parentId: string | null };
 export type BlockType = "dialogue" | "stage";
 export type Block = {
   id: string;

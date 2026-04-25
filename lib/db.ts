@@ -43,7 +43,7 @@ type BlockRow = {
   type: DbBlockType;
   content: string;
 };
-type SceneRow = { id: string; num: string; name: string; sort_order: number };
+type SceneRow = { id: string; num: string; name: string; sort_order: number; parent_id: string | null };
 type CharRow  = { id: string; name: string; sort_order: number };
 type ScCharRow = { script_id: string; character_id: string };
 
@@ -65,7 +65,7 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
         [productionId]
       ),
       pool.query<SceneRow>(
-        "SELECT id, num, name, sort_order FROM scene WHERE production_id = $1 ORDER BY sort_order",
+        "SELECT id, num, name, sort_order, parent_id FROM scene WHERE production_id = $1 ORDER BY sort_order",
         [productionId]
       ),
       pool.query<CharRow>(
@@ -113,7 +113,7 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
   return {
     state: {
       blocks,
-      scenes: scenesRes.rows.map(r => ({ id: r.id, number: r.num, name: r.name })),
+      scenes: scenesRes.rows.map(r => ({ id: r.id, number: r.num, name: r.name, parentId: r.parent_id })),
       characters: charsRes.rows.map(r => ({ id: r.id, name: r.name })),
     },
     sortKeys,
@@ -133,11 +133,12 @@ export async function flushToDB(productionId: string, payload: FlushPayload): Pr
 
     if (upsertScenes.length > 0) {
       await client.query(
-        `INSERT INTO scene (id, production_id, num, name, sort_order)
-         SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::int[])
-         ON CONFLICT (id) DO UPDATE SET num = EXCLUDED.num, name = EXCLUDED.name, sort_order = EXCLUDED.sort_order`,
+        `INSERT INTO scene (id, production_id, num, name, sort_order, parent_id)
+         SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::int[]), unnest($6::text[])
+         ON CONFLICT (id) DO UPDATE SET num = EXCLUDED.num, name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, parent_id = EXCLUDED.parent_id`,
         [upsertScenes.map(s => s.id), productionId,
-         upsertScenes.map(s => s.number), upsertScenes.map(s => s.name), upsertScenes.map(s => s.sortOrder)]
+         upsertScenes.map(s => s.number), upsertScenes.map(s => s.name), upsertScenes.map(s => s.sortOrder),
+         upsertScenes.map(s => s.parentId ?? null)]
       );
     }
 
@@ -522,12 +523,40 @@ export async function listProductionCharacters(productionId: string): Promise<Ch
   return res.rows.map((r) => ({ id: r.id, name: r.name }));
 }
 
-export async function listProductionScenes(productionId: string): Promise<Scene[]> {
-  const res = await getPool().query<{ id: string; num: string; name: string }>(
-    "SELECT id, num, name FROM scene WHERE production_id = $1 ORDER BY sort_order",
+/** Returns ordered rehearsal marks grouped by scene_id. */
+export async function listRehearsalMarksByScene(productionId: string): Promise<Record<string, string[]>> {
+  const res = await getPool().query<{ scene_id: string; rehearsal_mark: string }>(
+    `SELECT scene_id, rehearsal_mark
+     FROM script
+     WHERE production_id = $1 AND scene_id IS NOT NULL AND rehearsal_mark IS NOT NULL
+     ORDER BY sort_key`,
     [productionId]
   );
-  return res.rows.map((r) => ({ id: r.id, number: r.num, name: r.name }));
+  const map: Record<string, string[]> = {};
+  for (const row of res.rows) {
+    if (!map[row.scene_id]) map[row.scene_id] = [];
+    map[row.scene_id].push(row.rehearsal_mark);
+  }
+  return map;
+}
+
+export async function listProductionScenes(productionId: string): Promise<SceneDetail[]> {
+  const res = await getPool().query<{
+    id: string; num: string; name: string; parent_id: string | null;
+    synopsis: string | null; action_line: string | null; music: string | null;
+    stage_notes: string | null; expected_duration: string | null;
+  }>(
+    "SELECT id, num, name, parent_id, synopsis, action_line, music, stage_notes, expected_duration FROM scene WHERE production_id = $1 ORDER BY sort_order",
+    [productionId]
+  );
+  return res.rows.map((r) => ({
+    id: r.id, number: r.num, name: r.name, parentId: r.parent_id,
+    synopsis: r.synopsis ?? "",
+    actionLine: r.action_line ?? "",
+    music: r.music ?? "",
+    stageNotes: r.stage_notes ?? "",
+    expectedDuration: r.expected_duration ?? "",
+  }));
 }
 
 export async function getCharacterById(id: string, productionId: string): Promise<Character | null> {
@@ -538,12 +567,57 @@ export async function getCharacterById(id: string, productionId: string): Promis
   return res.rows[0] ? { id: res.rows[0].id, name: res.rows[0].name } : null;
 }
 
-export async function getSceneById(id: string, productionId: string): Promise<Scene | null> {
-  const res = await getPool().query<{ id: string; num: string; name: string }>(
-    "SELECT id, num, name FROM scene WHERE id = $1 AND production_id = $2",
+export type SceneDetail = Scene & {
+  synopsis: string;
+  actionLine: string;
+  music: string;
+  stageNotes: string;
+  expectedDuration: string;
+};
+
+export async function getSceneById(id: string, productionId: string): Promise<SceneDetail | null> {
+  const res = await getPool().query<{
+    id: string; num: string; name: string; parent_id: string | null;
+    synopsis: string | null; action_line: string | null; music: string | null;
+    stage_notes: string | null; expected_duration: string | null;
+  }>(
+    "SELECT id, num, name, parent_id, synopsis, action_line, music, stage_notes, expected_duration FROM scene WHERE id = $1 AND production_id = $2",
     [id, productionId]
   );
-  return res.rows[0] ? { id: res.rows[0].id, number: res.rows[0].num, name: res.rows[0].name } : null;
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id, number: r.num, name: r.name, parentId: r.parent_id,
+    synopsis: r.synopsis ?? "",
+    actionLine: r.action_line ?? "",
+    music: r.music ?? "",
+    stageNotes: r.stage_notes ?? "",
+    expectedDuration: r.expected_duration ?? "",
+  };
+}
+
+export async function updateSceneMetadata(
+  id: string,
+  productionId: string,
+  fields: Partial<Pick<SceneDetail, "synopsis" | "actionLine" | "music" | "stageNotes" | "expectedDuration">>
+): Promise<void> {
+  const sets: string[] = [];
+  const values: unknown[] = [id, productionId];
+  const map: Record<string, string> = {
+    synopsis: "synopsis", actionLine: "action_line", music: "music",
+    stageNotes: "stage_notes", expectedDuration: "expected_duration",
+  };
+  for (const [key, col] of Object.entries(map)) {
+    if (key in fields) {
+      values.push(fields[key as keyof typeof fields] ?? "");
+      sets.push(`${col} = $${values.length}`);
+    }
+  }
+  if (sets.length === 0) return;
+  await getPool().query(
+    `UPDATE scene SET ${sets.join(", ")} WHERE id = $1 AND production_id = $2`,
+    values
+  );
 }
 
 export async function upsertProductionMemberWithRoles(

@@ -235,7 +235,7 @@ export function toScriptState(
   // what Feishu hands back in record values (plain strings, not option IDs).
   const scenes: Scene[] = (fieldMap.段落.property?.options ?? []).map((opt) => {
     const { number, name } = parseSceneName(opt.name);
-    return { id: opt.name, number, name };
+    return { id: opt.name, number, name, parentId: null };
   });
 
   const characters: Character[] = (fieldMap.角色.property?.options ?? []).map((opt) => ({

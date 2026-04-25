@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, updateSceneMetadata } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -11,6 +11,8 @@ async function getCtx(req: NextRequest, productionId: string) {
   return { session, memberRoles, overrides };
 }
 
+const METADATA_KEYS = ["synopsis", "actionLine", "music", "stageNotes", "expectedDuration"] as const;
+
 export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production/[id]/scenes/[sceneId]">) {
   const { id, sceneId } = await ctx.params;
   const { session, memberRoles, overrides } = await getCtx(req, id);
@@ -19,19 +21,32 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
-  const state = getState(id);
-  const scene = state.scenes.find((s) => s.id === sceneId);
-  if (!scene) return Response.json({ error: "未找到章节" }, { status: 404 });
-
   const body = await req.json();
-  const updated = {
-    ...scene,
-    number: typeof body.number === "string" ? body.number.trim() : scene.number,
-    name:   typeof body.name   === "string" ? body.name.trim()   : scene.name,
-  };
 
-  await applyPatch(id, { clientSeq: 0, blockOps: [], charOps: [], sceneOps: [{ op: "upsert", scene: updated }] });
-  return Response.json({ ok: true, scene: updated });
+  // Handle number/name through the cache system
+  const hasStructural = "number" in body || "name" in body;
+  if (hasStructural) {
+    const state = getState(id);
+    const scene = state.scenes.find((s) => s.id === sceneId);
+    if (!scene) return Response.json({ error: "未找到章节" }, { status: 404 });
+    const updated = {
+      ...scene,
+      number: typeof body.number === "string" ? body.number.trim() : scene.number,
+      name:   typeof body.name   === "string" ? body.name.trim()   : scene.name,
+    };
+    await applyPatch(id, { clientSeq: 0, blockOps: [], charOps: [], sceneOps: [{ op: "upsert", scene: updated }] });
+  }
+
+  // Handle metadata fields directly in DB
+  const metaFields: Record<string, string> = {};
+  for (const key of METADATA_KEYS) {
+    if (key in body && typeof body[key] === "string") metaFields[key] = body[key];
+  }
+  if (Object.keys(metaFields).length > 0) {
+    await updateSceneMetadata(sceneId, id, metaFields);
+  }
+
+  return Response.json({ ok: true });
 }
 
 export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/production/[id]/scenes/[sceneId]">) {
