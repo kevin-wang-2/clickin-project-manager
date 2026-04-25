@@ -399,10 +399,7 @@ export default function ScenesManager({ productionId, productionName, initialSce
                 {acts.map((act) => {
                   const children = subScenes(act.id);
                   const actMarkList: string[] = [];
-                  for (const m of [
-                    ...(rehearsalMarks[act.id] ?? []),
-                    ...children.flatMap((s) => rehearsalMarks[s.id] ?? []),
-                  ]) {
+                  for (const m of rehearsalMarks[act.id] ?? []) {
                     if (actMarkList[actMarkList.length - 1] !== m) actMarkList.push(m);
                   }
                   return (
