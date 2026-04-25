@@ -1,16 +1,22 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getCharacterById, getProductionName, listProductionCharacters } from "@/lib/db";
+import {
+  getProductionMemberContext,
+  getProductionName,
+  listProductionScenes,
+  listRehearsalMarksByScene,
+  listProductionCharacters,
+} from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import CharacterDetailView from "@/components/CharacterDetail";
+import Dramaturgy from "@/components/Dramaturgy";
 
-export default async function CharacterDetailPage({
+export default async function DramaturgyPage({
   params,
 }: {
-  params: Promise<{ id: string; charId: string }>;
+  params: Promise<{ id: string }>;
 }) {
-  const { id, charId } = await params;
+  const { id } = await params;
   const cookieStore = await cookies();
   const session = getSession(cookieStore);
   if (!session) redirect("/login");
@@ -20,19 +26,21 @@ export default async function CharacterDetailPage({
 
   const canEdit = hasPermission("script:metadata", session.isAdmin, memberRoles, overrides);
 
-  const [name, character, allCharacters] = await Promise.all([
+  const [name, scenes, rehearsalMarks, characters] = await Promise.all([
     getProductionName(id),
-    getCharacterById(charId, id),
+    listProductionScenes(id),
+    listRehearsalMarksByScene(id),
     listProductionCharacters(id),
   ]);
-  if (!name || !character) redirect(`/production/${id}/characters`);
+  if (!name) redirect("/");
 
   return (
-    <CharacterDetailView
+    <Dramaturgy
       productionId={id}
       productionName={name}
-      character={character}
-      allCharacters={allCharacters}
+      initialScenes={scenes}
+      rehearsalMarks={rehearsalMarks}
+      initialCharacters={characters}
       canEdit={canEdit}
     />
   );

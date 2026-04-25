@@ -241,6 +241,7 @@ export function toScriptState(
   const characters: Character[] = (fieldMap.角色.property?.options ?? []).map((opt) => ({
     id: opt.name,
     name: opt.name,
+    isAggregate: false,
   }));
 
   const blocks: Block[] = ordered.map((record): Block => {

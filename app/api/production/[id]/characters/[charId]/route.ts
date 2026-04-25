@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, patchCharacterMeta, setCharacterMembers } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -19,16 +19,49 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
+  const body = await req.json();
+
+  // memberIds: replace the full set of aggregate members
+  if ("memberIds" in body) {
+    const memberIds: string[] = Array.isArray(body.memberIds)
+      ? body.memberIds.filter((m: unknown) => typeof m === "string")
+      : [];
+    await setCharacterMembers(charId, memberIds);
+    return Response.json({ ok: true });
+  }
+
+  // Metadata fields go directly to DB (not through cache)
+  const hasMeta = "gender" in body || "biography" in body || "roleType" in body;
+  if (hasMeta) {
+    const meta: { gender?: string; biography?: string; roleType?: string } = {};
+    if (typeof body.gender    === "string") meta.gender    = body.gender;
+    if (typeof body.biography === "string") meta.biography = body.biography;
+    if (typeof body.roleType  === "string") meta.roleType  = body.roleType;
+    await patchCharacterMeta(charId, meta);
+    return Response.json({ ok: true });
+  }
+
+  // Structural fields (name, isAggregate) go through the cache
   const state = getState(id);
   const char = state.characters.find((c) => c.id === charId);
   if (!char) return Response.json({ error: "未找到角色" }, { status: 404 });
 
-  const { name } = await req.json();
-  const trimmed = typeof name === "string" ? name.trim() : "";
-  if (!trimmed) return Response.json({ error: "名称不能为空" }, { status: 400 });
+  // name is optional — if omitted, keep existing
+  const nameVal = typeof body.name === "string" ? body.name.trim() : char.name;
+  if (!nameVal) return Response.json({ error: "名称不能为空" }, { status: 400 });
 
-  const updated = { ...char, name: trimmed };
+  const updated = {
+    ...char,
+    name: nameVal,
+    isAggregate: typeof body.isAggregate === "boolean" ? body.isAggregate : char.isAggregate,
+  };
   await applyPatch(id, { clientSeq: 0, blockOps: [], charOps: [{ op: "upsert", char: updated }], sceneOps: [] });
+
+  // When converting to/from aggregate, clear member associations
+  if (typeof body.isAggregate === "boolean" && body.isAggregate !== char.isAggregate) {
+    await setCharacterMembers(charId, []);
+  }
+
   return Response.json({ ok: true, char: updated });
 }
 

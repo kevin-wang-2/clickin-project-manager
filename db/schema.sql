@@ -37,10 +37,20 @@ CREATE TABLE IF NOT EXISTS character (
   id            TEXT PRIMARY KEY,
   production_id TEXT NOT NULL REFERENCES production(id) ON DELETE CASCADE,
   name          TEXT NOT NULL,
-  sort_order    INTEGER NOT NULL DEFAULT 0
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  is_aggregate  BOOLEAN NOT NULL DEFAULT false,
+  gender        TEXT,
+  biography     TEXT,
+  role_type     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS character_production_idx ON character(production_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS character_aggregate (
+  aggregate_id TEXT NOT NULL REFERENCES character(id) ON DELETE CASCADE,
+  member_id    TEXT NOT NULL REFERENCES character(id) ON DELETE CASCADE,
+  PRIMARY KEY (aggregate_id, member_id)
+);
 
 CREATE TABLE IF NOT EXISTS script (
   id              TEXT PRIMARY KEY,

@@ -44,7 +44,7 @@ type BlockRow = {
   content: string;
 };
 type SceneRow = { id: string; num: string; name: string; sort_order: number; parent_id: string | null };
-type CharRow  = { id: string; name: string; sort_order: number };
+type CharRow  = { id: string; name: string; sort_order: number; is_aggregate: boolean };
 type ScCharRow = { script_id: string; character_id: string };
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
         [productionId]
       ),
       pool.query<CharRow>(
-        "SELECT id, name, sort_order FROM character WHERE production_id = $1 ORDER BY sort_order",
+        "SELECT id, name, sort_order, is_aggregate FROM character WHERE production_id = $1 ORDER BY sort_order",
         [productionId]
       ),
     ]),
@@ -114,7 +114,7 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
     state: {
       blocks,
       scenes: scenesRes.rows.map(r => ({ id: r.id, number: r.num, name: r.name, parentId: r.parent_id })),
-      characters: charsRes.rows.map(r => ({ id: r.id, name: r.name })),
+      characters: charsRes.rows.map(r => ({ id: r.id, name: r.name, isAggregate: r.is_aggregate })),
     },
     sortKeys,
   };
@@ -144,11 +144,12 @@ export async function flushToDB(productionId: string, payload: FlushPayload): Pr
 
     if (upsertChars.length > 0) {
       await client.query(
-        `INSERT INTO character (id, production_id, name, sort_order)
-         SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::int[])
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order`,
+        `INSERT INTO character (id, production_id, name, sort_order, is_aggregate)
+         SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::int[]), unnest($5::bool[])
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, is_aggregate = EXCLUDED.is_aggregate`,
         [upsertChars.map(c => c.id), productionId,
-         upsertChars.map(c => c.name), upsertChars.map(c => c.sortOrder)]
+         upsertChars.map(c => c.name), upsertChars.map(c => c.sortOrder),
+         upsertChars.map(c => c.isAggregate)]
       );
     }
 
@@ -513,14 +514,78 @@ export async function upsertContactUser(
   );
 }
 
+export type CharacterDetail = Character & {
+  gender: string;
+  biography: string;
+  roleType: string;
+  memberIds: string[]; // IDs of constituent characters (only non-empty for aggregate)
+};
+
 // Upserts a production member with roles and an optional production-specific photo.
 // Photo only overwrites if a new value is provided.
-export async function listProductionCharacters(productionId: string): Promise<Character[]> {
-  const res = await getPool().query<{ id: string; name: string }>(
-    "SELECT id, name FROM character WHERE production_id = $1 ORDER BY sort_order, name",
-    [productionId]
-  );
-  return res.rows.map((r) => ({ id: r.id, name: r.name }));
+export async function listProductionCharacters(productionId: string): Promise<CharacterDetail[]> {
+  const pool = getPool();
+  const [charsRes, membersRes] = await Promise.all([
+    pool.query<{
+      id: string; name: string; is_aggregate: boolean;
+      gender: string | null; biography: string | null; role_type: string | null;
+    }>(
+      "SELECT id, name, is_aggregate, gender, biography, role_type FROM character WHERE production_id = $1 ORDER BY sort_order, name",
+      [productionId]
+    ),
+    pool.query<{ aggregate_id: string; member_id: string }>(
+      `SELECT ca.aggregate_id, ca.member_id FROM character_aggregate ca
+       JOIN character c ON c.id = ca.aggregate_id WHERE c.production_id = $1`,
+      [productionId]
+    ),
+  ]);
+  const memberMap = new Map<string, string[]>();
+  for (const row of membersRes.rows) {
+    if (!memberMap.has(row.aggregate_id)) memberMap.set(row.aggregate_id, []);
+    memberMap.get(row.aggregate_id)!.push(row.member_id);
+  }
+  return charsRes.rows.map((r) => ({
+    id: r.id, name: r.name, isAggregate: r.is_aggregate,
+    gender: r.gender ?? "",
+    biography: r.biography ?? "",
+    roleType: r.role_type ?? "",
+    memberIds: memberMap.get(r.id) ?? [],
+  }));
+}
+
+export async function setCharacterMembers(aggregateId: string, memberIds: string[]): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM character_aggregate WHERE aggregate_id = $1", [aggregateId]);
+    if (memberIds.length > 0) {
+      await client.query(
+        `INSERT INTO character_aggregate (aggregate_id, member_id)
+         SELECT $1::text, unnest($2::text[])`,
+        [aggregateId, memberIds]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function patchCharacterMeta(
+  id: string,
+  fields: { gender?: string; biography?: string; roleType?: string }
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (fields.gender   !== undefined) { sets.push(`gender = $${vals.push(fields.gender)}`); }
+  if (fields.biography !== undefined) { sets.push(`biography = $${vals.push(fields.biography)}`); }
+  if (fields.roleType  !== undefined) { sets.push(`role_type = $${vals.push(fields.roleType)}`); }
+  if (!sets.length) return;
+  vals.push(id);
+  await getPool().query(`UPDATE character SET ${sets.join(", ")} WHERE id = $${vals.length}`, vals);
 }
 
 /** Returns ordered rehearsal marks grouped by scene_id. */
@@ -560,12 +625,27 @@ export async function listProductionScenes(productionId: string): Promise<SceneD
   }));
 }
 
-export async function getCharacterById(id: string, productionId: string): Promise<Character | null> {
-  const res = await getPool().query<{ id: string; name: string }>(
-    "SELECT id, name FROM character WHERE id = $1 AND production_id = $2",
-    [id, productionId]
-  );
-  return res.rows[0] ? { id: res.rows[0].id, name: res.rows[0].name } : null;
+export async function getCharacterById(id: string, productionId: string): Promise<CharacterDetail | null> {
+  const pool = getPool();
+  const [charRes, membersRes] = await Promise.all([
+    pool.query<{
+      id: string; name: string; is_aggregate: boolean;
+      gender: string | null; biography: string | null; role_type: string | null;
+    }>(
+      "SELECT id, name, is_aggregate, gender, biography, role_type FROM character WHERE id = $1 AND production_id = $2",
+      [id, productionId]
+    ),
+    pool.query<{ member_id: string }>(
+      "SELECT member_id FROM character_aggregate WHERE aggregate_id = $1",
+      [id]
+    ),
+  ]);
+  const r = charRes.rows[0];
+  return r ? {
+    id: r.id, name: r.name, isAggregate: r.is_aggregate,
+    gender: r.gender ?? "", biography: r.biography ?? "", roleType: r.role_type ?? "",
+    memberIds: membersRes.rows.map((m) => m.member_id),
+  } : null;
 }
 
 export type SceneDetail = Scene & {

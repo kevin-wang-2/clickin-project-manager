@@ -2419,7 +2419,7 @@ export default function ScriptEditor({
   }, [saveSnapshot]);
 
   const addChar = (name: string) => {
-    setCharacters((prev) => [...prev, { id: uid(), name }]);
+    setCharacters((prev) => [...prev, { id: uid(), name, isAggregate: false }]);
   };
 
   const removeChar = (charId: string) => {

@@ -41,8 +41,15 @@ export default async function ProductionDashboard({
             <p className="text-base font-medium text-zinc-700">人员</p>
           </Link>
           <Link
-            href={`/production/${id}/script`}
+            href={`/production/${id}/dramaturgy`}
             className="rounded-2xl bg-white px-4 py-8 shadow-sm text-center hover:shadow-md transition-shadow"
+          >
+            <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase mb-1">Dramaturgy</p>
+            <p className="text-base font-medium text-zinc-700">戏剧构作</p>
+          </Link>
+          <Link
+            href={`/production/${id}/script`}
+            className="col-span-2 rounded-2xl bg-white px-4 py-8 shadow-sm text-center hover:shadow-md transition-shadow"
           >
             <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase mb-1">Script</p>
             <p className="text-base font-medium text-zinc-700">剧本</p>

@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, listProductionCharacters } from "@/lib/db";
+import { getProductionMemberContext, listProductionCharacters, setCharacterMembers } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -30,17 +30,25 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
-  const { name } = await req.json();
-  const trimmed = typeof name === "string" ? name.trim() : "";
+  const body = await req.json();
+  const trimmed = typeof body.name === "string" ? body.name.trim() : "";
   if (!trimmed) return Response.json({ error: "名称不能为空" }, { status: 400 });
+  const isAggregate = body.isAggregate === true;
+  const memberIds: string[] = isAggregate && Array.isArray(body.memberIds)
+    ? body.memberIds.filter((m: unknown) => typeof m === "string")
+    : [];
 
   const state = getState(id);
-  const newChar = { id: `c${Date.now().toString(36)}`, name: trimmed };
+  const newChar = { id: `c${Date.now().toString(36)}`, name: trimmed, isAggregate };
   // check duplicate
   if (state.characters.some((c) => c.name === trimmed)) {
     return Response.json({ error: "角色名已存在" }, { status: 409 });
   }
 
   await applyPatch(id, { clientSeq: 0, blockOps: [], charOps: [{ op: "upsert", char: newChar }], sceneOps: [] });
-  return Response.json({ ok: true, char: newChar }, { status: 201 });
+  if (isAggregate && memberIds.length > 0) {
+    await setCharacterMembers(newChar.id, memberIds);
+  }
+  const charDetail = { ...newChar, gender: "", biography: "", roleType: "", memberIds };
+  return Response.json({ ok: true, char: charDetail }, { status: 201 });
 }

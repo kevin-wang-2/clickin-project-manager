@@ -13,6 +13,7 @@ type Props = {
   initialScenes: SceneDetail[];
   rehearsalMarks: Record<string, string[]>;
   canEdit: boolean;
+  embedded?: boolean;
 };
 
 function MetaField({
@@ -191,7 +192,7 @@ function SceneEditRow({
             )}
             <button
               onClick={() => setExpanded((v) => !v)}
-              className={`text-xs transition-all ${expanded ? "text-zinc-400" : "text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-zinc-500"}`}
+              className={`text-xs transition-all ${expanded ? "text-zinc-500" : "text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-zinc-600"}`}
               title={expanded ? "收起" : "展开详情"}
             >
               {expanded ? "⌃" : "⌄"}
@@ -315,7 +316,7 @@ function AddSceneRow({
   );
 }
 
-export default function ScenesManager({ productionId, productionName, initialScenes, rehearsalMarks, canEdit }: Props) {
+export default function ScenesManager({ productionId, productionName, initialScenes, rehearsalMarks, canEdit, embedded }: Props) {
   const [scenes, setScenes] = useState<SceneDetail[]>(initialScenes);
 
   const update = async (id: string, number: string, name: string) => {
@@ -369,19 +370,7 @@ export default function ScenesManager({ productionId, productionName, initialSce
   const orphans = scenes.filter((s) => s.parentId !== null && !scenes.find((a) => a.id === s.parentId));
   const colSpan = 4;
 
-  return (
-    <div className="min-h-screen bg-zinc-100 px-4 py-8">
-      <div className="mx-auto max-w-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <Link href={`/production/${productionId}/script`} className="text-xs text-zinc-400 hover:text-zinc-600 transition-colors">
-            ← 返回剧本
-          </Link>
-          <div className="text-right">
-            <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase">Scenes</p>
-            <p className="text-sm font-bold text-zinc-500">{productionName}</p>
-          </div>
-        </div>
-
+  const card = (
         <div className="rounded-2xl bg-white shadow-sm overflow-hidden">
           {acts.length === 0 && orphans.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-zinc-300">暂无章节</p>
@@ -467,6 +456,23 @@ export default function ScenesManager({ productionId, productionName, initialSce
             </div>
           )}
         </div>
+  );
+
+  if (embedded) return card;
+
+  return (
+    <div className="min-h-screen bg-zinc-100 px-4 py-8">
+      <div className="mx-auto max-w-2xl">
+        <div className="mb-6 flex items-center justify-between">
+          <Link href={`/production/${productionId}/script`} className="text-xs text-zinc-400 hover:text-zinc-600 transition-colors">
+            ← 返回剧本
+          </Link>
+          <div className="text-right">
+            <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase">Scenes</p>
+            <p className="text-sm font-bold text-zinc-500">{productionName}</p>
+          </div>
+        </div>
+        {card}
       </div>
     </div>
   );
