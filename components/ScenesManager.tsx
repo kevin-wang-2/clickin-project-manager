@@ -398,13 +398,12 @@ export default function ScenesManager({ productionId, productionName, initialSce
               <tbody>
                 {acts.map((act) => {
                   const children = subScenes(act.id);
-                  const actMarkSet = new Set<string>();
                   const actMarkList: string[] = [];
                   for (const m of [
                     ...(rehearsalMarks[act.id] ?? []),
                     ...children.flatMap((s) => rehearsalMarks[s.id] ?? []),
                   ]) {
-                    if (!actMarkSet.has(m)) { actMarkSet.add(m); actMarkList.push(m); }
+                    if (actMarkList[actMarkList.length - 1] !== m) actMarkList.push(m);
                   }
                   return (
                     <React.Fragment key={act.id}>

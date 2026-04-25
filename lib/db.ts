@@ -535,7 +535,8 @@ export async function listRehearsalMarksByScene(productionId: string): Promise<R
   const map: Record<string, string[]> = {};
   for (const row of res.rows) {
     if (!map[row.scene_id]) map[row.scene_id] = [];
-    map[row.scene_id].push(row.rehearsal_mark);
+    const arr = map[row.scene_id];
+    if (arr[arr.length - 1] !== row.rehearsal_mark) arr.push(row.rehearsal_mark);
   }
   return map;
 }

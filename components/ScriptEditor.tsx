@@ -541,14 +541,13 @@ function SceneHeader({ scene }: { scene: Scene }) {
       </div>
     );
   }
-  // Sub-scene: lighter, indented
+  // Sub-scene: centered like act but smaller and lighter
   return (
     <div className="flex select-none items-center gap-2 px-8 py-2">
-      <div className="w-6 shrink-0" />
-      <div className="h-px w-3 shrink-0 bg-zinc-150" style={{ backgroundColor: "#e8e8e8" }} />
-      <div className="flex items-baseline gap-2">
-        <span className="text-xs font-bold tracking-widest text-zinc-300">{scene.number}</span>
-        {scene.name && <span className="text-sm text-zinc-400">{scene.name}</span>}
+      <div className="h-px flex-1 bg-zinc-100" />
+      <div className="flex items-baseline gap-1.5">
+        <span className="text-[10px] font-bold tracking-widest text-zinc-400">{scene.number}</span>
+        {scene.name && <span className="text-xs text-zinc-400">{scene.name}</span>}
       </div>
       <div className="h-px flex-1 bg-zinc-100" />
     </div>
