@@ -6,6 +6,7 @@ export type Block = {
   type: BlockType;
   content: string;
   characterIds: string[];
+  characterAnnotations: Record<string, string>;
   lyric: boolean;
   sceneId: string | null;
   rehearsalMark: string | null;

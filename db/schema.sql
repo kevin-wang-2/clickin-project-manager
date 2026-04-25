@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS script_character (
   script_id    TEXT NOT NULL REFERENCES script(id) ON DELETE CASCADE,
   character_id TEXT NOT NULL REFERENCES character(id) ON DELETE CASCADE,
   position     INTEGER NOT NULL DEFAULT 0,
+  annotation   TEXT,
   PRIMARY KEY (script_id, character_id)
 );
 

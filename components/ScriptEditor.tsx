@@ -22,6 +22,7 @@ const makeBlock = (content = "", characterIds: string[] = [], type: BlockType = 
   type,
   content,
   characterIds,
+  characterAnnotations: {},
   lyric: false,
   sceneId: null,
   rehearsalMark: null,
@@ -834,6 +835,8 @@ function BlockCharacterSelector({
   block,
   characters,
   onChange,
+  onAnnotationChange,
+  onEditingChange,
   editRequestToken,
   onArrowUp,
   onArrowDown,
@@ -842,14 +845,18 @@ function BlockCharacterSelector({
   block: Block;
   characters: Character[];
   onChange: (ids: string[]) => void;
+  onAnnotationChange: (charId: string, annotation: string) => void;
+  onEditingChange: (editing: boolean) => void;
   editRequestToken: number;
   onArrowUp: () => void;
   onArrowDown: () => void;
   readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
+  const setEditingWithNotify = useCallback((v: boolean) => { setEditing(v); onEditingChange(v); }, [onEditingChange]);
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
+  const [showAnnotations, setShowAnnotations] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -857,19 +864,26 @@ function BlockCharacterSelector({
   const [lastSeenToken, setLastSeenToken] = useState(editRequestToken);
   if (lastSeenToken !== editRequestToken && editRequestToken > 0) {
     setLastSeenToken(editRequestToken);
-    setEditing(true);
+    setEditingWithNotify(true);
   }
 
-  // Focus input whenever editing mode activates
+  // Focus input whenever editing mode activates; auto-expand annotations if any exist
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) {
+      inputRef.current?.focus();
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (block.characterIds.some((id) => block.characterAnnotations[id])) setShowAnnotations(true);
+    } else {
+      setShowAnnotations(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   useEffect(() => {
     if (!editing) return;
     const onDown = (e: MouseEvent) => {
       if (!wrapRef.current?.contains(e.target as Node)) {
-        setEditing(false);
+        setEditingWithNotify(false);
         setQuery("");
       }
     };
@@ -892,7 +906,7 @@ function BlockCharacterSelector({
   const removeChar = (id: string) =>
     onChange(block.characterIds.filter((c) => c !== id));
 
-  const close = () => { setEditing(false); setQuery(""); setHighlightIdx(0); };
+  const close = () => { setEditingWithNotify(false); setQuery(""); setHighlightIdx(0); };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -930,23 +944,28 @@ function BlockCharacterSelector({
     }
   };
 
+  const charLabel = (c: Character) => {
+    const ann = block.characterAnnotations[c.id];
+    return ann ? `${c.name}（${ann}）` : c.name;
+  };
+
   if (!editing) {
     return (
       <div className="mb-2 flex justify-center">
         {readOnly ? (
           <span className={`text-sm font-bold tracking-[0.12em] ${selected.length ? "text-zinc-800" : "text-zinc-300"}`}>
-            {selected.length ? selected.map((c) => c.name).join("、") : "无角色"}
+            {selected.length ? selected.map(charLabel).join("、") : "无角色"}
           </span>
         ) : (
           <button
-            onClick={() => setEditing(true)}
+            onClick={() => setEditingWithNotify(true)}
             className={`text-sm font-bold tracking-[0.12em] transition-colors ${
               selected.length
                 ? "text-zinc-800 hover:text-zinc-500"
                 : "text-zinc-300 hover:text-zinc-400"
             }`}
           >
-            {selected.length ? selected.map((c) => c.name).join("、") : "无角色"}
+            {selected.length ? selected.map(charLabel).join("、") : "无角色"}
           </button>
         )}
       </div>
@@ -965,9 +984,7 @@ function BlockCharacterSelector({
             <button
               onMouseDown={(e) => { e.preventDefault(); removeChar(c.id); }}
               className="ml-0.5 text-zinc-400 hover:text-zinc-700"
-            >
-              ×
-            </button>
+            >×</button>
           </span>
         ))}
         <input
@@ -995,7 +1012,31 @@ function BlockCharacterSelector({
           placeholder={selected.length === 0 ? "搜索角色…" : ""}
           className="min-w-[5rem] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-300"
         />
+        {selected.length > 0 && (
+          <button
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setShowAnnotations((v) => !v); }}
+            className="ml-auto shrink-0 text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors"
+          >
+            备注{showAnnotations ? " ▴" : " ▾"}
+          </button>
+        )}
       </div>
+      {showAnnotations && selected.length > 0 && (
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 rounded-b-lg border border-t-0 border-zinc-200 px-2.5 py-1.5">
+          {selected.map((c) => (
+            <label key={c.id} className="flex items-center gap-1">
+              <span className="text-[11px] text-zinc-400">{c.name}</span>
+              <input
+                value={block.characterAnnotations[c.id] ?? ""}
+                onChange={(e) => onAnnotationChange(c.id, e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
+                placeholder="备注…"
+                className="w-16 border-b border-zinc-200 bg-transparent text-[11px] text-zinc-600 outline-none placeholder:text-zinc-300 focus:border-zinc-400"
+              />
+            </label>
+          ))}
+        </div>
+      )}
       {suggestions.length > 0 && (
         <div className="absolute left-0 top-full z-10 mt-1 w-full rounded-xl border border-zinc-100 bg-white py-1 shadow-xl overflow-y-auto" style={{ maxHeight: "min(16rem, calc(100vh - 12rem))" }}>
           {suggestions.map((c, i) => (
@@ -1233,7 +1274,7 @@ function PrintPreview({
       <div key={block.id} className="w-full py-1">
         {!isStage && !hideChar && sel.length > 0 && (
           <div className="mb-0.5 w-full text-center text-sm font-bold tracking-[0.12em] text-zinc-800">
-            {sel.map((c) => c.name).join("、")}
+            {sel.map((c) => { const ann = block.characterAnnotations[c.id]; return ann ? `${c.name}（${ann}）` : c.name; }).join("、")}
           </div>
         )}
         <div
@@ -1429,7 +1470,8 @@ function mergeServerBlocks(
       b.rehearsalMark !== s.rehearsalMark ||
       b.sceneId !== s.sceneId ||
       b.characterIds.length !== s.characterIds.length ||
-      b.characterIds.some((id, i) => id !== s.characterIds[i])
+      b.characterIds.some((id, i) => id !== s.characterIds[i]) ||
+      b.characterIds.some((id) => (b.characterAnnotations[id] ?? "") !== (s.characterAnnotations[id] ?? ""))
     );
   };
 
@@ -1483,6 +1525,7 @@ function ScriptBlock({
   isMarkStart,
   commentCount,
   onCommentClick,
+  index = 0,
   canEditText = false,
   canEditMetadata = false,
   canEditRehearsalMark = false,
@@ -1511,6 +1554,7 @@ function ScriptBlock({
   isMarkStart: boolean;
   commentCount: number;
   onCommentClick: () => void;
+  index?: number;
   canEditText?: boolean;
   canEditMetadata?: boolean;
   canEditRehearsalMark?: boolean;
@@ -1518,6 +1562,7 @@ function ScriptBlock({
   const divRef = useRef<HTMLDivElement | null>(null);
   const localContentRef = useRef<string | null>(null);
   const composingRef = useRef(false);
+  const [charSelectorOpen, setCharSelectorOpen] = useState(false);
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
@@ -1648,7 +1693,7 @@ function ScriptBlock({
   return (
     <div
       className={`group relative px-6 py-0 text-center transition-colors ${
-        isFocused ? "bg-zinc-50/60" : ""
+        isFocused ? "bg-zinc-100/70" : (index ?? 0) % 2 === 1 ? "bg-zinc-50/60" : ""
       }`}
     >
       {/* Colored left bar showing a remote editor is active in this block */}
@@ -1682,7 +1727,7 @@ function ScriptBlock({
       )}
 
       {/* Right-side action buttons — flex row, no overlap */}
-      <div className="absolute right-2 top-1 flex items-center">
+      <div className={`absolute right-2 top-1 flex items-center transition-opacity ${charSelectorOpen ? "opacity-0 pointer-events-none" : ""}`}>
         {canEditText && !isStage && (
           <button
             onClick={onToggleLyric}
@@ -1727,6 +1772,8 @@ function ScriptBlock({
           block={block}
           characters={characters}
           onChange={(ids) => onUpdate({ characterIds: ids })}
+          onAnnotationChange={(charId, ann) => onUpdate({ characterAnnotations: { ...block.characterAnnotations, [charId]: ann } })}
+          onEditingChange={setCharSelectorOpen}
           editRequestToken={charEditToken}
           onArrowUp={onArrowUpFromChar}
           onArrowDown={onArrowDownFromChar}
@@ -2023,11 +2070,13 @@ export default function ScriptEditor({
   const [loadError, setLoadError] = useState<string>("");
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     setLoadState("loading");
     setLoadError("");
     setBlocks([makeBlock()]);
     setCharacters([]);
     setScenes([]);
+    /* eslint-enable react-hooks/set-state-in-effect */
     syncedStateRef.current = null;
 
     const loadUrl = productionId
@@ -2107,6 +2156,11 @@ export default function ScriptEditor({
       if (debounceTimer) clearTimeout(debounceTimer);
     };
   }, [effectiveScriptId, loadState, clientId]);
+
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [activeCommentBlockId, setActiveCommentBlockId] = useState<string | null>(null);
+  const [meOpenId, setMeOpenId] = useState("");
+  const [meIsAdmin, setMeIsAdmin] = useState(false);
 
   // Resolve Feishu display name and identity on mount
   useEffect(() => {
@@ -2425,10 +2479,10 @@ export default function ScriptEditor({
   const removeChar = (charId: string) => {
     setCharacters((prev) => prev.filter((c) => c.id !== charId));
     setBlocks((prev) =>
-      prev.map((b) => ({
-        ...b,
-        characterIds: b.characterIds.filter((id) => id !== charId),
-      }))
+      prev.map((b) => {
+        const { [charId]: _, ...restAnnotations } = b.characterAnnotations;
+        return { ...b, characterIds: b.characterIds.filter((id) => id !== charId), characterAnnotations: restAnnotations };
+      })
     );
   };
 
@@ -2464,11 +2518,6 @@ export default function ScriptEditor({
     setScenes((prev) => prev.filter((s) => s.id !== id));
     setBlocks((prev) => prev.map((b) => (b.sceneId === id ? { ...b, sceneId: null } : b)));
   };
-
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [activeCommentBlockId, setActiveCommentBlockId] = useState<string | null>(null);
-  const [meOpenId, setMeOpenId] = useState("");
-  const [meIsAdmin, setMeIsAdmin] = useState(false);
 
   const [printPreview, setPrintPreview] = useState(false);
 
@@ -2694,6 +2743,7 @@ export default function ScriptEditor({
                 })()}
                 <ScriptBlock
                   block={block}
+                  index={bIdx}
                   characters={characters}
                   scenes={scenes}
                   availableScenes={availableScenes}

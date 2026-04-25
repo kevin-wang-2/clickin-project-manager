@@ -261,6 +261,7 @@ export function toScriptState(
       type: blockType,
       content,
       characterIds,
+      characterAnnotations: {},
       lyric,
       sceneId,
       rehearsalMark,

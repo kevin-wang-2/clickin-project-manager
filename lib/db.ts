@@ -45,7 +45,7 @@ type BlockRow = {
 };
 type SceneRow = { id: string; num: string; name: string; sort_order: number; parent_id: string | null };
 type CharRow  = { id: string; name: string; sort_order: number; is_aggregate: boolean };
-type ScCharRow = { script_id: string; character_id: string };
+type ScCharRow = { script_id: string; character_id: string; annotation: string | null };
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
 
@@ -84,15 +84,20 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
   const blockIds = blocksRes.rows.map(r => r.id);
   const scCharRes = blockIds.length > 0
     ? await pool.query<ScCharRow>(
-        "SELECT script_id, character_id FROM script_character WHERE script_id = ANY($1::text[]) ORDER BY script_id, position",
+        "SELECT script_id, character_id, annotation FROM script_character WHERE script_id = ANY($1::text[]) ORDER BY script_id, position",
         [blockIds]
       )
     : { rows: [] as ScCharRow[] };
 
   const charsByBlock = new Map<string, string[]>();
+  const annotationsByBlock = new Map<string, Record<string, string>>();
   for (const row of scCharRes.rows) {
     if (!charsByBlock.has(row.script_id)) charsByBlock.set(row.script_id, []);
     charsByBlock.get(row.script_id)!.push(row.character_id);
+    if (row.annotation) {
+      if (!annotationsByBlock.has(row.script_id)) annotationsByBlock.set(row.script_id, {});
+      annotationsByBlock.get(row.script_id)![row.character_id] = row.annotation;
+    }
   }
 
   const sortKeys = new Map<string, string>();
@@ -107,6 +112,7 @@ export async function loadProduction(productionId: string): Promise<ProductionSt
       sceneId: row.scene_id,
       rehearsalMark: row.rehearsal_mark,
       characterIds: charsByBlock.get(row.id) ?? [],
+      characterAnnotations: annotationsByBlock.get(row.id) ?? {},
     };
   });
 
@@ -175,13 +181,13 @@ export async function flushToDB(productionId: string, payload: FlushPayload): Pr
         [upsertBlocks.map(b => b.id)]
       );
       const scRows = upsertBlocks.flatMap(b =>
-        b.characterIds.map((cid, pos) => ({ sid: b.id, cid, pos }))
+        b.characterIds.map((cid, pos) => ({ sid: b.id, cid, pos, ann: b.characterAnnotations[cid] ?? null }))
       );
       if (scRows.length > 0) {
         await client.query(
-          `INSERT INTO script_character (script_id, character_id, position)
-           SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[])`,
-          [scRows.map(r => r.sid), scRows.map(r => r.cid), scRows.map(r => r.pos)]
+          `INSERT INTO script_character (script_id, character_id, position, annotation)
+           SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[]), unnest($4::text[])`,
+          [scRows.map(r => r.sid), scRows.map(r => r.cid), scRows.map(r => r.pos), scRows.map(r => r.ann)]
         );
       }
     }
