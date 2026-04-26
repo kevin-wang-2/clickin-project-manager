@@ -420,28 +420,47 @@ export async function removeProductionMember(productionId: string, openId: strin
 
 // ─── Comments ─────────────────────────────────────────────────────────────────
 
+export type Mention = { openId: string; name: string };
+
 export type Comment = {
   id: string;
-  blockId: string;
+  productionId: string;
+  contextType: string;
+  contextId: string;
+  parentId: string | null;
   openId: string;
   authorName: string;
-  content: string;
+  body: string;
+  mentions: Mention[];
   createdAt: string;
   updatedAt: string;
 };
 
 type CommentRow = {
-  id: string; block_id: string; open_id: string;
-  author_name: string; content: string; created_at: Date; updated_at: Date;
+  id: string;
+  production_id: string;
+  context_type: string;
+  context_id: string;
+  parent_id: string | null;
+  open_id: string;
+  author_name: string;
+  body: string;
+  mentions: Mention[];
+  created_at: Date;
+  updated_at: Date;
 };
 
 function rowToComment(r: CommentRow): Comment {
   return {
     id: r.id,
-    blockId: r.block_id,
+    productionId: r.production_id,
+    contextType: r.context_type,
+    contextId: r.context_id,
+    parentId: r.parent_id,
     openId: r.open_id,
     authorName: r.author_name,
-    content: r.content,
+    body: r.body,
+    mentions: r.mentions ?? [],
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
@@ -449,39 +468,60 @@ function rowToComment(r: CommentRow): Comment {
 
 export async function listProductionComments(productionId: string): Promise<Comment[]> {
   const res = await getPool().query<CommentRow>(
-    `SELECT id, block_id, open_id, author_name, content, created_at, updated_at
-     FROM block_comment WHERE production_id = $1 ORDER BY created_at ASC`,
+    `SELECT id, production_id, context_type, context_id, parent_id,
+            open_id, author_name, body, mentions, created_at, updated_at
+     FROM comment WHERE production_id = $1 ORDER BY created_at ASC`,
     [productionId]
   );
   return res.rows.map(rowToComment);
 }
 
 export async function createComment(
-  productionId: string, blockId: string, openId: string, authorName: string, content: string
+  productionId: string,
+  contextType: string,
+  contextId: string,
+  parentId: string | null,
+  openId: string,
+  authorName: string,
+  body: string,
+  mentions: Mention[],
 ): Promise<Comment> {
   const res = await getPool().query<CommentRow>(
-    `INSERT INTO block_comment (production_id, block_id, open_id, author_name, content)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, block_id, open_id, author_name, content, created_at, updated_at`,
-    [productionId, blockId, openId, authorName, content]
+    `INSERT INTO comment
+       (production_id, context_type, context_id, parent_id, open_id, author_name, body, mentions)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, production_id, context_type, context_id, parent_id,
+               open_id, author_name, body, mentions, created_at, updated_at`,
+    [productionId, contextType, contextId, parentId, openId, authorName, body, JSON.stringify(mentions)]
   );
   return rowToComment(res.rows[0]);
 }
 
-export async function updateComment(id: string, openId: string, content: string): Promise<Comment | null> {
+export async function getCommentById(id: string): Promise<Comment | null> {
   const res = await getPool().query<CommentRow>(
-    `UPDATE block_comment SET content = $1, updated_at = now()
+    `SELECT id, production_id, context_type, context_id, parent_id,
+            open_id, author_name, body, mentions, created_at, updated_at
+     FROM comment WHERE id = $1`,
+    [id]
+  );
+  return res.rows.length ? rowToComment(res.rows[0]) : null;
+}
+
+export async function updateComment(id: string, openId: string, body: string): Promise<Comment | null> {
+  const res = await getPool().query<CommentRow>(
+    `UPDATE comment SET body = $1, updated_at = now()
      WHERE id = $2 AND open_id = $3
-     RETURNING id, block_id, open_id, author_name, content, created_at, updated_at`,
-    [content, id, openId]
+     RETURNING id, production_id, context_type, context_id, parent_id,
+               open_id, author_name, body, mentions, created_at, updated_at`,
+    [body, id, openId]
   );
   return res.rows.length ? rowToComment(res.rows[0]) : null;
 }
 
 export async function deleteComment(id: string, openId: string, isAdmin: boolean): Promise<boolean> {
   const res = isAdmin
-    ? await getPool().query("DELETE FROM block_comment WHERE id = $1 RETURNING id", [id])
-    : await getPool().query("DELETE FROM block_comment WHERE id = $1 AND open_id = $2 RETURNING id", [id, openId]);
+    ? await getPool().query("DELETE FROM comment WHERE id = $1 RETURNING id", [id])
+    : await getPool().query("DELETE FROM comment WHERE id = $1 AND open_id = $2 RETURNING id", [id, openId]);
   return res.rows.length > 0;
 }
 

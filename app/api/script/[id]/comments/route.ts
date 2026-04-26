@@ -1,7 +1,9 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, listProductionComments, createComment } from "@/lib/db";
+import { getProductionMemberContext, listProductionComments, createComment, getCommentById, getProductionName } from "@/lib/db";
+import type { Mention } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
+import { sendBotDm } from "@/lib/feishu-bot";
 
 async function guard(req: NextRequest, productionId: string) {
   const session = getSession(req.cookies);
@@ -13,7 +15,7 @@ async function guard(req: NextRequest, productionId: string) {
   return { session, deny: null };
 }
 
-export async function GET(req: NextRequest, ctx: RouteContext<"/api/script/[id]/comments">) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   const { deny } = await guard(req, id);
   if (deny) return deny;
@@ -21,12 +23,47 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/script/[id]/
   return Response.json({ comments });
 }
 
-export async function POST(req: NextRequest, ctx: RouteContext<"/api/script/[id]/comments">) {
-  const { id } = await ctx.params;
-  const { session, deny } = await guard(req, id);
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const { id: productionId } = await ctx.params;
+  const { session, deny } = await guard(req, productionId);
   if (!session || deny) return deny!;
-  const { blockId, content } = (await req.json()) as { blockId?: string; content?: string };
-  if (!blockId || !content?.trim()) return Response.json({ error: "参数错误" }, { status: 400 });
-  const comment = await createComment(id, blockId, session.openId, session.name, content.trim());
+
+  const body = (await req.json()) as {
+    blockId?: string;
+    body?: string;
+    parentId?: string;
+    mentions?: Mention[];
+  };
+  const { blockId, parentId = null, mentions = [] } = body;
+  const text = body.body?.trim();
+
+  if (!blockId || !text) return Response.json({ error: "参数错误" }, { status: 400 });
+
+  // Validate parentId: must exist, same production, and be a top-level comment (max 2 levels)
+  if (parentId) {
+    const parent = await getCommentById(parentId);
+    if (!parent || parent.productionId !== productionId)
+      return Response.json({ error: "父评论不存在" }, { status: 400 });
+    if (parent.parentId !== null)
+      return Response.json({ error: "不支持超过两层的嵌套回复" }, { status: 400 });
+  }
+
+  const comment = await createComment(
+    productionId, "block", blockId, parentId,
+    session.openId, session.name, text, mentions,
+  );
+
+  // Fire-and-forget: notify mentioned users via Feishu bot
+  if (mentions.length > 0) {
+    const productionName = await getProductionName(productionId).catch(() => null);
+    const prefix = productionName ? `《${productionName}》` : "制作";
+    const notifyText = `${session.name} 在${prefix}的评论中提到了你：\n${text}`;
+    for (const m of mentions) {
+      sendBotDm(m.openId, notifyText).catch(e =>
+        console.error(`[mention] notify failed for ${m.openId}:`, (e as Error).message)
+      );
+    }
+  }
+
   return Response.json({ comment }, { status: 201 });
 }
