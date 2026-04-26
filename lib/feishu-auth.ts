@@ -50,7 +50,7 @@ export function buildOAuthUrl(state: string): string {
   const params = new URLSearchParams({
     app_id: appId(),
     redirect_uri: redirectUri,
-    scope: "bitable:app wiki:wiki:readonly offline_access",
+    scope: "bitable:app wiki:wiki:readonly sheets:spreadsheet offline_access",
     state,
   });
   return `${BASE}/authen/v1/authorize?${params}`;
