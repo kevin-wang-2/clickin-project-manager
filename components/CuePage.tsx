@@ -270,11 +270,19 @@ function MentionTextarea({
 // ─── CueCommentsPanel ─────────────────────────────────────────────────────────
 
 function CueCommentsPanel({
-  cueId, productionId, comments, currentOpenId, isAdmin,
+  cue, canEdit, savingCueId,
+  productionId, comments, currentOpenId, isAdmin,
+  onCommitNumber, onCommitName, onCommitContent, onDismissWarning, onDeleteCue,
   onAdd, onEdit, onDelete, onClose,
 }: {
-  cueId: string; productionId: string; comments: Comment[];
+  cue: Cue; canEdit: boolean; savingCueId: string | null;
+  productionId: string; comments: Comment[];
   currentOpenId: string; isAdmin: boolean;
+  onCommitNumber: (v: string) => void;
+  onCommitName: (v: string) => void;
+  onCommitContent: (v: string) => void;
+  onDismissWarning: () => void;
+  onDeleteCue: () => void;
   onAdd: (c: Comment) => void; onEdit: (c: Comment) => void;
   onDelete: (id: string) => void; onClose: () => void;
 }) {
@@ -296,9 +304,9 @@ function CueCommentsPanel({
   }, [productionId]);
 
   const topLevel = useMemo(
-    () => comments.filter(c => c.contextId === cueId && c.parentId === null)
+    () => comments.filter(c => c.contextId === cue.id && c.parentId === null)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
-    [comments, cueId],
+    [comments, cue.id],
   );
   const repliesFor = useCallback(
     (parentId: string) => comments.filter(c => c.parentId === parentId)
@@ -312,7 +320,7 @@ function CueCommentsPanel({
     try {
       const res = await fetch(`${BASE_PATH}/api/production/${productionId}/cue-comments`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cueId, body: opts.text, parentId: opts.parentId ?? null, mentions: opts.mentions }),
+        body: JSON.stringify({ cueId: cue.id, body: opts.text, parentId: opts.parentId ?? null, mentions: opts.mentions }),
       });
       if (res.ok) return (await res.json()).comment as Comment;
     } finally { setSubmitting(false); }
@@ -352,6 +360,7 @@ function CueCommentsPanel({
   };
 
   const taClass = "w-full resize-none rounded border border-zinc-200 px-2 py-1.5 text-sm text-zinc-700 outline-none focus:border-zinc-400";
+  const fieldClass = "w-full text-xs border border-zinc-200 rounded px-2 py-1 outline-none focus:border-zinc-400";
 
   const commentHeader = (c: Comment) => (
     <div className="flex items-baseline justify-between">
@@ -403,68 +412,133 @@ function CueCommentsPanel({
 
   return (
     <div
-      className="fixed right-0 top-[44px] bottom-0 z-30 flex w-80 flex-col border-l border-zinc-200 bg-white shadow-xl"
+      className="fixed right-0 top-[44px] bottom-0 z-30 flex w-[480px] border-l border-zinc-200 bg-white shadow-xl"
       onClick={e => e.stopPropagation()}
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-4 py-3">
-        <span className="text-sm font-semibold text-zinc-700">评论</span>
-        <button onClick={onClose} className="text-lg leading-none text-zinc-300 hover:text-zinc-500">×</button>
-      </div>
+      {/* ── Inspector column ── */}
+      <div className="w-44 shrink-0 border-r border-zinc-100 flex flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-zinc-100 px-3 py-2.5">
+          <p className="text-[10px] text-zinc-400">{isPointCue(cue) ? "点 Cue" : "范围 Cue"}</p>
+          <p className="text-xs font-semibold text-zinc-700 truncate mt-0.5">
+            Q{cue.number}{cue.name ? ` · ${cue.name}` : ""}
+          </p>
+        </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        {topLevel.length === 0 && <p className="py-4 text-center text-xs text-zinc-300">暂无评论</p>}
-        {topLevel.map(topC => (
-          <div key={topC.id}>
-            <div className="group">
-              {commentHeader(topC)}
-              {commentBody(topC, {
-                label: replyingTo === topC.id ? "取消回复" : "回复",
-                onClick: () => replyingTo === topC.id ? setReplyingTo(null) : startReply(topC.id, topC.openId, topC.authorName),
-              })}
-            </div>
-
-            {repliesFor(topC.id).map(r => (
-              <div key={r.id} className="group mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
-                <p className="mb-0.5 text-[10px] text-zinc-300">↳ 回复 {r.mentions[0]?.name ?? topC.authorName}</p>
-                {commentHeader(r)}
-                {commentBody(r, {
-                  label: "回复",
-                  onClick: () => startReply(topC.id, r.openId, r.authorName),
-                })}
-              </div>
-            ))}
-
-            {replyingTo === topC.id && (
-              <div className="mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
-                <MentionTextarea value={replyText} onChange={setReplyText}
-                  mentions={replyMentions} onMentionsChange={setReplyMentions}
-                  members={members} placeholder="回复… (⌘↵ 发布)" rows={2} autoFocus
-                  onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitReply(); }}
-                  className={taClass} />
-                <div className="mt-1 flex justify-end gap-2">
-                  <button onClick={() => setReplyingTo(null)} className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-600">取消</button>
-                  <button onClick={submitReply} disabled={!replyText.trim() || submitting}
-                    className="rounded bg-zinc-800 px-3 py-1 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
-                    {submitting ? "…" : "回复"}
-                  </button>
-                </div>
-              </div>
+        <div className="flex-1 overflow-y-auto px-3 py-3 flex flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-zinc-400">Q#</span>
+            {canEdit ? (
+              <InlineField value={cue.number} onCommit={onCommitNumber} placeholder="编号" className={fieldClass} />
+            ) : (
+              <span className="text-xs text-zinc-700 px-2 py-1">{cue.number}</span>
             )}
           </div>
-        ))}
+
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-zinc-400">名称</span>
+            {canEdit ? (
+              <InlineField value={cue.name} onCommit={onCommitName} placeholder="—" className={fieldClass} />
+            ) : (
+              <span className="text-xs text-zinc-700 px-2 py-1">{cue.name || "—"}</span>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-zinc-400">内容</span>
+            {canEdit ? (
+              <InlineField value={cue.content} onCommit={onCommitContent} placeholder="—" className={fieldClass} />
+            ) : (
+              <span className="text-xs text-zinc-700 px-2 py-1 break-words">{cue.content || "—"}</span>
+            )}
+          </div>
+
+          {cue.warning && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] text-amber-500">⚠ 位置可能已偏移</span>
+              {canEdit && (
+                <button
+                  onClick={onDismissWarning}
+                  disabled={savingCueId === cue.id}
+                  className="text-[10px] text-amber-500 hover:text-amber-700 underline text-left disabled:opacity-50"
+                >
+                  清除警告
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {canEdit && (
+          <div className="shrink-0 border-t border-zinc-100 px-3 py-2">
+            <button onClick={onDeleteCue} className="text-xs text-red-400 hover:text-red-600 transition-colors">
+              删除 Cue
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="shrink-0 border-t border-zinc-100 px-4 py-3">
-        <MentionTextarea value={newText} onChange={setNewText}
-          mentions={newMentions} onMentionsChange={setNewMentions}
-          members={members} placeholder="添加评论… (⌘↵ 发布)" rows={3}
-          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitNew(); }}
-          className={taClass} />
-        <div className="mt-2 flex justify-end">
-          <button onClick={submitNew} disabled={!newText.trim() || submitting}
-            className="rounded bg-zinc-800 px-4 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
-            {submitting ? "…" : "发布"}
-          </button>
+      {/* ── Comments column ── */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-4 py-3">
+          <span className="text-sm font-semibold text-zinc-700">评论</span>
+          <button onClick={onClose} className="text-lg leading-none text-zinc-300 hover:text-zinc-500">×</button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+          {topLevel.length === 0 && <p className="py-4 text-center text-xs text-zinc-300">暂无评论</p>}
+          {topLevel.map(topC => (
+            <div key={topC.id}>
+              <div className="group">
+                {commentHeader(topC)}
+                {commentBody(topC, {
+                  label: replyingTo === topC.id ? "取消回复" : "回复",
+                  onClick: () => replyingTo === topC.id ? setReplyingTo(null) : startReply(topC.id, topC.openId, topC.authorName),
+                })}
+              </div>
+
+              {repliesFor(topC.id).map(r => (
+                <div key={r.id} className="group mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
+                  <p className="mb-0.5 text-[10px] text-zinc-300">↳ 回复 {r.mentions[0]?.name ?? topC.authorName}</p>
+                  {commentHeader(r)}
+                  {commentBody(r, {
+                    label: "回复",
+                    onClick: () => startReply(topC.id, r.openId, r.authorName),
+                  })}
+                </div>
+              ))}
+
+              {replyingTo === topC.id && (
+                <div className="mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
+                  <MentionTextarea value={replyText} onChange={setReplyText}
+                    mentions={replyMentions} onMentionsChange={setReplyMentions}
+                    members={members} placeholder="回复… (⌘↵ 发布)" rows={2} autoFocus
+                    onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitReply(); }}
+                    className={taClass} />
+                  <div className="mt-1 flex justify-end gap-2">
+                    <button onClick={() => setReplyingTo(null)} className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-600">取消</button>
+                    <button onClick={submitReply} disabled={!replyText.trim() || submitting}
+                      className="rounded bg-zinc-800 px-3 py-1 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
+                      {submitting ? "…" : "回复"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="shrink-0 border-t border-zinc-100 px-4 py-3">
+          <MentionTextarea value={newText} onChange={setNewText}
+            mentions={newMentions} onMentionsChange={setNewMentions}
+            members={members} placeholder="添加评论… (⌘↵ 发布)" rows={3}
+            onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitNew(); }}
+            className={taClass} />
+          <div className="mt-2 flex justify-end">
+            <button onClick={submitNew} disabled={!newText.trim() || submitting}
+              className="rounded bg-zinc-800 px-4 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
+              {submitting ? "…" : "发布"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -953,9 +1027,8 @@ export default function CuePage({
       .catch(() => {});
   }, [productionId]);
 
-  // Keep comment panel in sync with cue selection
+  // Comment panel follows cue selection: auto-open on select, close on deselect
   useEffect(() => {
-    if (!activeCommentCueId) return;
     if (selection.kind === "cue") {
       setActiveCommentCueId(selection.cueId);
     } else if (selection.kind === "none") {
@@ -1828,87 +1901,6 @@ export default function CuePage({
         </div>
       </div>
 
-      {/* ── Bottom bar: selected cue inspector ── */}
-      {selectedCue && (() => {
-        const canEdit = canEditCue(selectedCue);
-        return (
-          <div
-            className="shrink-0 bg-white border-t border-zinc-200 px-4 py-2.5 flex items-center gap-3"
-            onClick={e => e.stopPropagation()}
-          >
-            {selectedCue.warning && (
-              <span className="text-[10px] text-amber-500 shrink-0">⚠ 位置可能已偏移</span>
-            )}
-            <span className="text-[10px] text-zinc-400 shrink-0">Q#</span>
-            {canEdit ? (
-              <InlineField
-                value={selectedCue.number}
-                onCommit={v => updateCueField(selectedCue, { number: v })}
-                placeholder="编号"
-                className="w-14 text-xs border border-zinc-200 rounded px-2 py-1 outline-none focus:border-zinc-400"
-              />
-            ) : (
-              <span className="w-14 text-xs text-zinc-600 px-2 py-1">{selectedCue.number}</span>
-            )}
-            <span className="text-[10px] text-zinc-400 shrink-0">名称</span>
-            {canEdit ? (
-              <InlineField
-                value={selectedCue.name}
-                onCommit={v => updateCueField(selectedCue, { name: v })}
-                placeholder="—"
-                className="w-32 text-xs border border-zinc-200 rounded px-2 py-1 outline-none focus:border-zinc-400"
-              />
-            ) : (
-              <span className="w-32 text-xs text-zinc-600 px-2 py-1">{selectedCue.name || "—"}</span>
-            )}
-            <span className="text-[10px] text-zinc-400 shrink-0">内容</span>
-            {canEdit ? (
-              <InlineField
-                value={selectedCue.content}
-                onCommit={v => updateCueField(selectedCue, { content: v })}
-                placeholder="—"
-                className="flex-1 text-xs border border-zinc-200 rounded px-2 py-1 outline-none focus:border-zinc-400"
-              />
-            ) : (
-              <span className="flex-1 text-xs text-zinc-600 px-2 py-1">{selectedCue.content || "—"}</span>
-            )}
-            <span className="text-[10px] text-zinc-400 shrink-0">
-              {isPointCue(selectedCue) ? "点" : "范围"}
-            </span>
-            <button
-              onClick={e => { e.stopPropagation(); setActiveCommentCueId(selectedCue.id); }}
-              className={`text-xs shrink-0 transition-colors ${
-                comments.filter(c => c.contextId === selectedCue.id).length > 0
-                  ? "text-blue-500 hover:text-blue-700"
-                  : "text-zinc-400 hover:text-zinc-600"
-              }`}
-            >
-              {(() => {
-                const n = comments.filter(c => c.contextId === selectedCue.id).length;
-                return n > 0 ? `评论 (${n})` : "评论";
-              })()}
-            </button>
-            {canEdit && selectedCue.warning && (
-              <button
-                onClick={() => dismissWarning(selectedCue)}
-                disabled={savingCueId === selectedCue.id}
-                className="text-[10px] text-amber-500 hover:text-amber-700 underline shrink-0 disabled:opacity-50"
-              >
-                清除警告
-              </button>
-            )}
-            {canEdit && (
-              <button
-                onClick={() => deleteCue(selectedCue)}
-                className="text-xs text-red-400 hover:text-red-600 transition-colors shrink-0"
-              >
-                删除
-              </button>
-            )}
-          </div>
-        );
-      })()}
-
       {showExport && (
         <ExportModal
           cueLists={cueLists}
@@ -1918,17 +1910,24 @@ export default function CuePage({
         />
       )}
 
-      {activeCommentCueId && (
+      {activeCommentCueId && selectedCue && (
         <CueCommentsPanel
-          cueId={activeCommentCueId}
+          cue={selectedCue}
+          canEdit={canEditCue(selectedCue)}
+          savingCueId={savingCueId}
           productionId={productionId}
           comments={comments}
           currentOpenId={myOpenId}
           isAdmin={isAdmin}
+          onCommitNumber={v => updateCueField(selectedCue, { number: v })}
+          onCommitName={v => updateCueField(selectedCue, { name: v })}
+          onCommitContent={v => updateCueField(selectedCue, { content: v })}
+          onDismissWarning={() => dismissWarning(selectedCue)}
+          onDeleteCue={() => deleteCue(selectedCue)}
           onAdd={c => setComments(prev => [...prev, c])}
           onEdit={c => setComments(prev => prev.map(x => x.id === c.id ? c : x))}
           onDelete={id => setComments(prev => prev.filter(x => x.id !== id))}
-          onClose={() => setActiveCommentCueId(null)}
+          onClose={() => setSelection({ kind: "none" })}
         />
       )}
     </div>
