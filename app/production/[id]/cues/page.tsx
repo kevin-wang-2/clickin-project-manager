@@ -51,6 +51,7 @@ export default async function CuesPage({
       initialCues={allCues}
       editableListIds={[...editableListIds]}
       myOpenId={session.openId}
+      isAdmin={session.isAdmin}
     />
   );
 }

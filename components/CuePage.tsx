@@ -3,6 +3,8 @@
 import React, {
   useState, useRef, useCallback, useMemo, useEffect,
 } from "react";
+import { createPortal } from "react-dom";
+import { match as pinyinMatch } from "pinyin-pro";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { Block, Character, Scene } from "@/lib/script-types";
@@ -78,6 +80,7 @@ type Props = {
   initialCues: Cue[];
   editableListIds: string[];
   myOpenId: string;
+  isAdmin: boolean;
 };
 
 type Selection =
@@ -100,6 +103,24 @@ type GuideLineData = {
   chipX: number; chipY: number; markX: number; markY: number;
 };
 
+// ─── Comment types ───────────────────────────────────────────────────────────
+
+type Mention = { openId: string; name: string };
+
+type Comment = {
+  id: string;
+  productionId: string;
+  contextType: string;
+  contextId: string;
+  parentId: string | null;
+  openId: string;
+  authorName: string;
+  body: string;
+  mentions: Mention[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ─── Presence ────────────────────────────────────────────────────────────────
 
 type CuePresence = {
@@ -119,6 +140,335 @@ function getOrCreateClientId(): string {
 
 function anonymousName(clientId: string): string {
   return "访客 " + clientId.slice(-4).toUpperCase();
+}
+
+// ─── Comment helpers ─────────────────────────────────────────────────────────
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return new Date(iso).toLocaleDateString("zh-CN");
+}
+
+function BodyWithMentions({ body, mentions }: { body: string; mentions: Mention[] }) {
+  if (!mentions.length)
+    return <p className="whitespace-pre-wrap break-words text-sm text-zinc-600">{body}</p>;
+  const escaped = mentions.map(m => m.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`@(${escaped.join("|")})`, "g");
+  const parts: React.ReactNode[] = [];
+  let last = 0; let key = 0; let m: RegExpExecArray | null;
+  while ((m = regex.exec(body)) !== null) {
+    if (m.index > last) parts.push(body.slice(last, m.index));
+    parts.push(<span key={key++} className="font-medium text-blue-500">@{m[1]}</span>);
+    last = m.index + m[0].length;
+  }
+  if (last < body.length) parts.push(body.slice(last));
+  return <p className="whitespace-pre-wrap break-words text-sm text-zinc-600">{parts}</p>;
+}
+
+function MentionTextarea({
+  value, onChange, mentions, onMentionsChange, members,
+  placeholder, rows, className, onKeyDown, autoFocus,
+}: {
+  value: string; onChange: (v: string) => void;
+  mentions: Mention[]; onMentionsChange: (m: Mention[]) => void;
+  members: Mention[]; placeholder?: string; rows?: number;
+  className?: string; onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  autoFocus?: boolean;
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [drop, setDrop] = useState<{ active: boolean; atPos: number; filter: string; idx: number }>(
+    { active: false, atPos: 0, filter: "", idx: 0 },
+  );
+  const [dropStyle, setDropStyle] = useState<React.CSSProperties>({});
+
+  const filtered = useMemo<Mention[]>(() => {
+    if (!drop.active) return [];
+    const f = drop.filter;
+    if (!f) return members.slice(0, 6);
+    return members.filter(m =>
+      m.name.includes(f) || pinyinMatch(m.name, f.toLowerCase()) != null
+    ).slice(0, 6);
+  }, [drop.active, drop.filter, members]);
+
+  const computeDropStyle = useCallback((): React.CSSProperties => {
+    const ta = taRef.current;
+    if (!ta) return {};
+    const rect = ta.getBoundingClientRect();
+    return {
+      position: "fixed",
+      left: rect.left,
+      width: rect.width,
+      bottom: window.innerHeight - rect.top + 4,
+      maxHeight: Math.min(220, rect.top - 8),
+      overflowY: "auto",
+      zIndex: 9999,
+    };
+  }, []);
+
+  const pickMember = useCallback((m: Mention) => {
+    const ta = taRef.current; if (!ta) return;
+    const before = value.slice(0, drop.atPos);
+    const after = value.slice(drop.atPos + 1 + drop.filter.length);
+    const next = `${before}@${m.name} ${after}`;
+    onChange(next);
+    onMentionsChange([...mentions.filter(x => x.openId !== m.openId), m]);
+    setDrop(d => ({ ...d, active: false }));
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = before.length + 1 + m.name.length + 1;
+      ta.setSelectionRange(pos, pos);
+    });
+  }, [value, drop, onChange, onMentionsChange, mentions]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    const cur = e.target.selectionStart ?? val.length;
+    onChange(val);
+    const match = val.slice(0, cur).match(/@([^\s@]*)$/);
+    if (match) {
+      setDropStyle(computeDropStyle());
+      setDrop({ active: true, atPos: cur - match[0].length, filter: match[1], idx: 0 });
+    } else {
+      setDrop(d => d.active ? { ...d, active: false } : d);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (drop.active && filtered.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setDrop(d => ({ ...d, idx: Math.min(d.idx + 1, filtered.length - 1) })); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); setDrop(d => ({ ...d, idx: Math.max(d.idx - 1, 0) })); return; }
+      if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); pickMember(filtered[drop.idx]); return; }
+      if (e.key === "Escape") { setDrop(d => ({ ...d, active: false })); return; }
+    }
+    onKeyDown?.(e);
+  };
+
+  return (
+    <>
+      <textarea ref={taRef} value={value} onChange={handleChange} onKeyDown={handleKeyDown}
+        placeholder={placeholder} rows={rows} autoFocus={autoFocus} className={className} />
+      {drop.active && filtered.length > 0 && createPortal(
+        <div style={dropStyle} className="overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lg">
+          {filtered.map((m, i) => (
+            <button key={m.openId} type="button"
+              onMouseDown={e => { e.preventDefault(); pickMember(m); }}
+              className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${i === drop.idx ? "bg-zinc-100 text-zinc-800" : "text-zinc-700 hover:bg-zinc-50"}`}
+            >{m.name}</button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// ─── CueCommentsPanel ─────────────────────────────────────────────────────────
+
+function CueCommentsPanel({
+  cueId, productionId, comments, currentOpenId, isAdmin,
+  onAdd, onEdit, onDelete, onClose,
+}: {
+  cueId: string; productionId: string; comments: Comment[];
+  currentOpenId: string; isAdmin: boolean;
+  onAdd: (c: Comment) => void; onEdit: (c: Comment) => void;
+  onDelete: (id: string) => void; onClose: () => void;
+}) {
+  const [members, setMembers] = useState<Mention[]>([]);
+  const [newText, setNewText] = useState("");
+  const [newMentions, setNewMentions] = useState<Mention[]>([]);
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [replyMentions, setReplyMentions] = useState<Mention[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    fetch(`${BASE_PATH}/api/production/${productionId}/mention-users`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.users) setMembers(d.users); })
+      .catch(() => {});
+  }, [productionId]);
+
+  const topLevel = useMemo(
+    () => comments.filter(c => c.contextId === cueId && c.parentId === null)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [comments, cueId],
+  );
+  const repliesFor = useCallback(
+    (parentId: string) => comments.filter(c => c.parentId === parentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+    [comments],
+  );
+
+  const postComment = async (opts: { parentId?: string; text: string; mentions: Mention[] }) => {
+    if (submitting) return null;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/cue-comments`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cueId, body: opts.text, parentId: opts.parentId ?? null, mentions: opts.mentions }),
+      });
+      if (res.ok) return (await res.json()).comment as Comment;
+    } finally { setSubmitting(false); }
+    return null;
+  };
+
+  const submitNew = async () => {
+    const text = newText.trim(); if (!text) return;
+    const c = await postComment({ text, mentions: newMentions });
+    if (c) { onAdd(c); setNewText(""); setNewMentions([]); }
+  };
+
+  const submitReply = async () => {
+    const text = replyText.trim(); if (!text || !replyingTo) return;
+    const c = await postComment({ parentId: replyingTo, text, mentions: replyMentions });
+    if (c) { onAdd(c); setReplyText(""); setReplyMentions([]); setReplyingTo(null); }
+  };
+
+  const saveEdit = async (id: string) => {
+    const text = editText.trim(); if (!text) return;
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/cue-comments/${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: text }),
+    });
+    if (res.ok) { onEdit((await res.json()).comment); setEditingId(null); }
+  };
+
+  const doDelete = async (id: string) => {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/cue-comments/${id}`, { method: "DELETE" });
+    if (res.ok) onDelete(id);
+  };
+
+  const startReply = (parentId: string, authorOpenId: string, authorName: string) => {
+    setReplyingTo(parentId);
+    setReplyText(`@${authorName} `);
+    setReplyMentions([{ openId: authorOpenId, name: authorName }]);
+  };
+
+  const taClass = "w-full resize-none rounded border border-zinc-200 px-2 py-1.5 text-sm text-zinc-700 outline-none focus:border-zinc-400";
+
+  const commentHeader = (c: Comment) => (
+    <div className="flex items-baseline justify-between">
+      <span className="text-xs font-semibold text-zinc-700">{c.authorName}</span>
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-zinc-300" title={new Date(c.createdAt).toLocaleString("zh-CN")}>
+          {relativeTime(c.createdAt)}
+        </span>
+        {editingId !== c.id && (
+          <>
+            {c.openId === currentOpenId && (
+              <button onClick={() => { setEditingId(c.id); setEditText(c.body); }}
+                className="text-[11px] text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100 hover:text-zinc-600">
+                编辑
+              </button>
+            )}
+            {(c.openId === currentOpenId || isAdmin) && (
+              <button onClick={() => doDelete(c.id)}
+                className="text-[11px] text-zinc-300 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-400">
+                删除
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  const commentBody = (c: Comment, replyAction?: { label: string; onClick: () => void }) => (
+    editingId === c.id ? (
+      <div className="mt-1">
+        <textarea value={editText} onChange={e => setEditText(e.target.value)} autoFocus rows={3} className={taClass} />
+        <div className="mt-1.5 flex gap-2">
+          <button onClick={() => setEditingId(null)} className="flex-1 rounded border border-zinc-200 py-1 text-xs text-zinc-500 hover:border-zinc-400">取消</button>
+          <button onClick={() => saveEdit(c.id)} className="flex-1 rounded bg-zinc-800 py-1 text-xs text-white hover:bg-zinc-700">保存</button>
+        </div>
+      </div>
+    ) : (
+      <div className="mt-0.5">
+        <BodyWithMentions body={c.body} mentions={c.mentions} />
+        {replyAction && (
+          <button onClick={replyAction.onClick} className="mt-0.5 text-[11px] text-zinc-300 hover:text-zinc-500">
+            {replyAction.label}
+          </button>
+        )}
+      </div>
+    )
+  );
+
+  return (
+    <div
+      className="fixed right-0 top-[44px] bottom-0 z-30 flex w-80 flex-col border-l border-zinc-200 bg-white shadow-xl"
+      onClick={e => e.stopPropagation()}
+    >
+      <div className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-4 py-3">
+        <span className="text-sm font-semibold text-zinc-700">评论</span>
+        <button onClick={onClose} className="text-lg leading-none text-zinc-300 hover:text-zinc-500">×</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {topLevel.length === 0 && <p className="py-4 text-center text-xs text-zinc-300">暂无评论</p>}
+        {topLevel.map(topC => (
+          <div key={topC.id}>
+            <div className="group">
+              {commentHeader(topC)}
+              {commentBody(topC, {
+                label: replyingTo === topC.id ? "取消回复" : "回复",
+                onClick: () => replyingTo === topC.id ? setReplyingTo(null) : startReply(topC.id, topC.openId, topC.authorName),
+              })}
+            </div>
+
+            {repliesFor(topC.id).map(r => (
+              <div key={r.id} className="group mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
+                <p className="mb-0.5 text-[10px] text-zinc-300">↳ 回复 {r.mentions[0]?.name ?? topC.authorName}</p>
+                {commentHeader(r)}
+                {commentBody(r, {
+                  label: "回复",
+                  onClick: () => startReply(topC.id, r.openId, r.authorName),
+                })}
+              </div>
+            ))}
+
+            {replyingTo === topC.id && (
+              <div className="mt-2 ml-3 border-l-2 border-zinc-200 pl-3">
+                <MentionTextarea value={replyText} onChange={setReplyText}
+                  mentions={replyMentions} onMentionsChange={setReplyMentions}
+                  members={members} placeholder="回复… (⌘↵ 发布)" rows={2} autoFocus
+                  onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitReply(); }}
+                  className={taClass} />
+                <div className="mt-1 flex justify-end gap-2">
+                  <button onClick={() => setReplyingTo(null)} className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-600">取消</button>
+                  <button onClick={submitReply} disabled={!replyText.trim() || submitting}
+                    className="rounded bg-zinc-800 px-3 py-1 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
+                    {submitting ? "…" : "回复"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="shrink-0 border-t border-zinc-100 px-4 py-3">
+        <MentionTextarea value={newText} onChange={setNewText}
+          mentions={newMentions} onMentionsChange={setNewMentions}
+          members={members} placeholder="添加评论… (⌘↵ 发布)" rows={3}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitNew(); }}
+          className={taClass} />
+        <div className="mt-2 flex justify-end">
+          <button onClick={submitNew} disabled={!newText.trim() || submitting}
+            className="rounded bg-zinc-800 px-4 py-1.5 text-xs text-white hover:bg-zinc-700 disabled:opacity-40">
+            {submitting ? "…" : "发布"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Inline edit field ────────────────────────────────────────────────────────
@@ -535,11 +885,13 @@ function ExportModal({
 
 export default function CuePage({
   productionId, productionName, blocks, characters, scenes,
-  cueLists, initialCues, editableListIds,
+  cueLists, initialCues, editableListIds, myOpenId, isAdmin,
 }: Props) {
   const [cues, setCues] = useState<Cue[]>(initialCues);
   const [copiedCue, setCopiedCue] = useState<Cue | null>(null);
   const [showExport, setShowExport] = useState(false);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [activeCommentCueId, setActiveCommentCueId] = useState<string | null>(null);
   const [visibleListIds, setVisibleListIds] = useState<Set<string>>(
     () => new Set(cueLists.slice(0, 3).map(cl => cl.id))
   );
@@ -592,6 +944,14 @@ export default function CuePage({
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load cue comments for this production
+  useEffect(() => {
+    fetch(`${BASE_PATH}/api/production/${productionId}/cue-comments`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { comments?: Comment[] } | null) => { if (d?.comments) setComments(d.comments); })
+      .catch(() => {});
+  }, [productionId]);
 
   const sendCuePresence = useCallback((listId: string | null, cueId: string | null) => {
     if (!clientId || !userName) return;
@@ -1505,6 +1865,19 @@ export default function CuePage({
             <span className="text-[10px] text-zinc-400 shrink-0">
               {isPointCue(selectedCue) ? "点" : "范围"}
             </span>
+            <button
+              onClick={e => { e.stopPropagation(); setActiveCommentCueId(selectedCue.id); }}
+              className={`text-xs shrink-0 transition-colors ${
+                comments.filter(c => c.contextId === selectedCue.id).length > 0
+                  ? "text-blue-500 hover:text-blue-700"
+                  : "text-zinc-400 hover:text-zinc-600"
+              }`}
+            >
+              {(() => {
+                const n = comments.filter(c => c.contextId === selectedCue.id).length;
+                return n > 0 ? `评论 (${n})` : "评论";
+              })()}
+            </button>
             {canEdit && selectedCue.warning && (
               <button
                 onClick={() => dismissWarning(selectedCue)}
@@ -1532,6 +1905,20 @@ export default function CuePage({
           defaultSelectedIds={visibleListIds}
           productionId={productionId}
           onClose={() => setShowExport(false)}
+        />
+      )}
+
+      {activeCommentCueId && (
+        <CueCommentsPanel
+          cueId={activeCommentCueId}
+          productionId={productionId}
+          comments={comments}
+          currentOpenId={myOpenId}
+          isAdmin={isAdmin}
+          onAdd={c => setComments(prev => [...prev, c])}
+          onEdit={c => setComments(prev => prev.map(x => x.id === c.id ? c : x))}
+          onDelete={id => setComments(prev => prev.filter(x => x.id !== id))}
+          onClose={() => setActiveCommentCueId(null)}
         />
       )}
     </div>
