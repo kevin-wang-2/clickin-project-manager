@@ -1,6 +1,8 @@
 import { getPool } from "./pg";
 import type { Block, Character, Scene, ScriptState } from "./script-types";
 import type { Permission, PermissionOverrides } from "./roles";
+import type { Cue, CueAnchor } from "./cue-types";
+import { adjustBlockAnchor, lcsAdjust } from "./cue-types";
 
 // ─── Exported types ───────────────────────────────────────────────────────────
 
@@ -133,6 +135,33 @@ export async function flushToDB(productionId: string, payload: FlushPayload): Pr
   if (!upsertBlocks.length && !deleteBlockIds.length && !upsertChars.length &&
       !deleteCharIds.length && !upsertScenes.length && !deleteSceneIds.length) return;
 
+  // ── Phase 1: snapshot pre-flush state needed for cue drift ────────────────
+  const oldContents = new Map<string, string>();
+  const blockAdj = new Map<string, { prevId: string | null; nextId: string | null }>();
+
+  if (upsertBlocks.length > 0) {
+    const ids = upsertBlocks.map(b => b.id);
+    const res = await getPool().query<{ id: string; content: string }>(
+      "SELECT id, content FROM script WHERE id = ANY($1::text[])", [ids]
+    );
+    for (const r of res.rows) oldContents.set(r.id, r.content);
+  }
+
+  if (deleteBlockIds.length > 0) {
+    const res = await getPool().query<{ id: string; prev_id: string | null; next_id: string | null }>(
+      `WITH ordered AS (
+         SELECT id,
+           LAG(id)  OVER (ORDER BY sort_key) AS prev_id,
+           LEAD(id) OVER (ORDER BY sort_key) AS next_id
+         FROM script WHERE production_id = $1
+       )
+       SELECT id, prev_id, next_id FROM ordered WHERE id = ANY($2::text[])`,
+      [productionId, deleteBlockIds]
+    );
+    for (const r of res.rows) blockAdj.set(r.id, { prevId: r.prev_id, nextId: r.next_id });
+  }
+
+  // ── Phase 2: main script transaction ─────────────────────────────────────
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -206,6 +235,19 @@ export async function flushToDB(productionId: string, payload: FlushPayload): Pr
   } finally {
     client.release();
   }
+
+  // ── Phase 3: cue drift adjustments (best-effort, after script committed) ──
+  const driftJobs: Promise<void>[] = [];
+  for (const blockId of deleteBlockIds) {
+    const adj = blockAdj.get(blockId);
+    if (adj) driftJobs.push(handleBlockDeleted(blockId, adj.prevId, adj.nextId));
+  }
+  for (const block of upsertBlocks) {
+    const old = oldContents.get(block.id);
+    if (old !== undefined && old !== block.content)
+      driftJobs.push(handleBlockContentChanged(block.id, old, block.content));
+  }
+  if (driftJobs.length > 0) await Promise.allSettled(driftJobs);
 }
 
 // ─── Production management ────────────────────────────────────────────────────
@@ -705,6 +747,341 @@ export async function updateSceneMetadata(
     `UPDATE scene SET ${sets.join(", ")} WHERE id = $1 AND production_id = $2`,
     values
   );
+}
+
+// ─── Cue lists ────────────────────────────────────────────────────────────────
+
+import type { CueList, CueListPermissionRow } from "./cue-list-types";
+
+type CueListRow = {
+  id: string; production_id: string; name: string; notes: string;
+  template: string | null; default_edit_roles: string[];
+  created_by: string; created_by_name: string; created_at: Date;
+};
+
+export async function listCueLists(productionId: string): Promise<CueList[]> {
+  const res = await getPool().query<CueListRow>(
+    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.template,
+            cl.default_edit_roles, cl.created_by, fu.name AS created_by_name, cl.created_at
+     FROM cue_list cl
+     JOIN feishu_user fu ON fu.open_id = cl.created_by
+     WHERE cl.production_id = $1
+     ORDER BY cl.created_at`,
+    [productionId]
+  );
+  return res.rows.map(r => ({
+    id: r.id, productionId: r.production_id, name: r.name, notes: r.notes,
+    template: r.template, defaultEditRoles: r.default_edit_roles,
+    createdBy: r.created_by, createdByName: r.created_by_name,
+    createdAt: r.created_at.toISOString(),
+  }));
+}
+
+export async function createCueList(data: {
+  id: string; productionId: string; name: string; notes: string;
+  template: string | null; defaultEditRoles: string[]; createdBy: string;
+}): Promise<void> {
+  await getPool().query(
+    `INSERT INTO cue_list (id, production_id, name, notes, template, default_edit_roles, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [data.id, data.productionId, data.name, data.notes, data.template, data.defaultEditRoles, data.createdBy]
+  );
+}
+
+export async function getCueList(id: string, productionId: string): Promise<CueList | null> {
+  const res = await getPool().query<CueListRow>(
+    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.template,
+            cl.default_edit_roles, cl.created_by, fu.name AS created_by_name, cl.created_at
+     FROM cue_list cl
+     JOIN feishu_user fu ON fu.open_id = cl.created_by
+     WHERE cl.id = $1 AND cl.production_id = $2`,
+    [id, productionId]
+  );
+  if (!res.rows.length) return null;
+  const r = res.rows[0];
+  return {
+    id: r.id, productionId: r.production_id, name: r.name, notes: r.notes,
+    template: r.template, defaultEditRoles: r.default_edit_roles,
+    createdBy: r.created_by, createdByName: r.created_by_name,
+    createdAt: r.created_at.toISOString(),
+  };
+}
+
+export async function updateCueList(
+  id: string, productionId: string,
+  fields: { name?: string; notes?: string }
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [id, productionId];
+  if (fields.name  !== undefined) sets.push(`name  = $${vals.push(fields.name)}`);
+  if (fields.notes !== undefined) sets.push(`notes = $${vals.push(fields.notes)}`);
+  if (!sets.length) return;
+  await getPool().query(
+    `UPDATE cue_list SET ${sets.join(", ")} WHERE id = $1 AND production_id = $2`,
+    vals
+  );
+}
+
+export async function deleteCueList(id: string, productionId: string): Promise<void> {
+  await getPool().query(
+    "DELETE FROM cue_list WHERE id = $1 AND production_id = $2",
+    [id, productionId]
+  );
+}
+
+export async function listCueListPermissions(cueListId: string): Promise<CueListPermissionRow[]> {
+  const res = await getPool().query<{ open_id: string; can_edit: boolean }>(
+    "SELECT open_id, can_edit FROM cue_list_permission WHERE cue_list_id = $1",
+    [cueListId]
+  );
+  return res.rows.map(r => ({ openId: r.open_id, canEdit: r.can_edit }));
+}
+
+export async function setCueListPermission(
+  cueListId: string, openId: string, canEdit: boolean | null
+): Promise<void> {
+  if (canEdit === null) {
+    await getPool().query(
+      "DELETE FROM cue_list_permission WHERE cue_list_id = $1 AND open_id = $2",
+      [cueListId, openId]
+    );
+  } else {
+    await getPool().query(
+      `INSERT INTO cue_list_permission (cue_list_id, open_id, can_edit) VALUES ($1, $2, $3)
+       ON CONFLICT (cue_list_id, open_id) DO UPDATE SET can_edit = EXCLUDED.can_edit`,
+      [cueListId, openId, canEdit]
+    );
+  }
+}
+
+// ─── Cues ─────────────────────────────────────────────────────────────────────
+
+type CueRow = {
+  id: string; cue_list_id: string; number: string; name: string; content: string;
+  start_kind: string; start_block_id: string; start_offset: number | null;
+  end_kind: string;   end_block_id: string;   end_offset: number | null;
+  warning: boolean;
+};
+
+function rowToCue(r: CueRow): Cue {
+  const start: CueAnchor = r.start_kind === "gap"
+    ? { kind: "gap", afterBlockId: r.start_block_id }
+    : { kind: "block", blockId: r.start_block_id, offset: r.start_offset! };
+  const end: CueAnchor = r.end_kind === "gap"
+    ? { kind: "gap", afterBlockId: r.end_block_id }
+    : { kind: "block", blockId: r.end_block_id, offset: r.end_offset! };
+  return { id: r.id, cueListId: r.cue_list_id, number: r.number, name: r.name, content: r.content, start, end, warning: r.warning };
+}
+
+function anchorToDb(a: CueAnchor) {
+  if (a.kind === "gap") return { kind: "gap", blockId: a.afterBlockId, offset: null };
+  return { kind: "block", blockId: a.blockId, offset: a.offset };
+}
+
+export async function listCues(cueListId: string): Promise<Cue[]> {
+  const res = await getPool().query<CueRow>(
+    `SELECT id, cue_list_id, number, name, content,
+            start_kind, start_block_id, start_offset,
+            end_kind, end_block_id, end_offset, warning
+     FROM cue WHERE cue_list_id = $1 ORDER BY number`,
+    [cueListId]
+  );
+  return res.rows.map(rowToCue);
+}
+
+export async function listCuesByProduction(productionId: string): Promise<Cue[]> {
+  const res = await getPool().query<CueRow>(
+    `SELECT c.id, c.cue_list_id, c.number, c.name, c.content,
+            c.start_kind, c.start_block_id, c.start_offset,
+            c.end_kind, c.end_block_id, c.end_offset, c.warning
+     FROM cue c
+     JOIN cue_list cl ON cl.id = c.cue_list_id
+     WHERE cl.production_id = $1
+     ORDER BY c.number`,
+    [productionId]
+  );
+  return res.rows.map(rowToCue);
+}
+
+export async function countWarningCues(cueListIds: string[]): Promise<number> {
+  if (cueListIds.length === 0) return 0;
+  const res = await getPool().query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM cue WHERE cue_list_id = ANY($1::text[]) AND warning = TRUE`,
+    [cueListIds]
+  );
+  return parseInt(res.rows[0].count, 10);
+}
+
+export async function createCue(data: {
+  id: string; cueListId: string; number: string; name: string; content: string;
+  start: CueAnchor; end: CueAnchor;
+}): Promise<void> {
+  const s = anchorToDb(data.start);
+  const e = anchorToDb(data.end);
+  await getPool().query(
+    `INSERT INTO cue (id, cue_list_id, number, name, content,
+       start_kind, start_block_id, start_offset,
+       end_kind,   end_block_id,   end_offset)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [data.id, data.cueListId, data.number, data.name, data.content,
+     s.kind, s.blockId, s.offset, e.kind, e.blockId, e.offset]
+  );
+}
+
+export async function updateCue(
+  id: string, cueListId: string,
+  fields: { number?: string; name?: string; content?: string; start?: CueAnchor; end?: CueAnchor; warning?: boolean }
+): Promise<void> {
+  const sets: string[] = [];
+  const vals: unknown[] = [id, cueListId];
+  if (fields.number  !== undefined) sets.push(`number  = $${vals.push(fields.number)}`);
+  if (fields.name    !== undefined) sets.push(`name    = $${vals.push(fields.name)}`);
+  if (fields.content !== undefined) sets.push(`content = $${vals.push(fields.content)}`);
+  if (fields.warning !== undefined) sets.push(`warning = $${vals.push(fields.warning)}`);
+  if (fields.start !== undefined) {
+    const s = anchorToDb(fields.start);
+    sets.push(`start_kind=$${vals.push(s.kind)}, start_block_id=$${vals.push(s.blockId)}, start_offset=$${vals.push(s.offset)}`);
+  }
+  if (fields.end !== undefined) {
+    const e = anchorToDb(fields.end);
+    sets.push(`end_kind=$${vals.push(e.kind)}, end_block_id=$${vals.push(e.blockId)}, end_offset=$${vals.push(e.offset)}`);
+  }
+  if (!sets.length) return;
+  await getPool().query(
+    `UPDATE cue SET ${sets.join(", ")} WHERE id = $1 AND cue_list_id = $2`,
+    vals
+  );
+}
+
+export async function deleteCue(id: string, cueListId: string): Promise<void> {
+  await getPool().query("DELETE FROM cue WHERE id = $1 AND cue_list_id = $2", [id, cueListId]);
+}
+
+/**
+ * Called when a block is deleted from the script.
+ * Cues anchored to the deleted block are re-anchored:
+ *   - If prevBlockId exists  → gap after prevBlockId
+ *   - Else if nextBlockId exists → start of nextBlockId (offset 0)
+ *   - Else → delete the cue (no script left)
+ */
+export async function handleBlockDeleted(
+  deletedBlockId: string,
+  prevBlockId: string | null,
+  nextBlockId: string | null,
+): Promise<void> {
+  if (!prevBlockId && !nextBlockId) {
+    await getPool().query(
+      "DELETE FROM cue WHERE start_block_id = $1 OR end_block_id = $1",
+      [deletedBlockId]
+    );
+    return;
+  }
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Replace start anchors; mark warning because position has shifted
+    if (prevBlockId) {
+      await client.query(
+        `UPDATE cue SET start_kind='gap', start_block_id=$1, start_offset=NULL, warning=TRUE
+         WHERE start_block_id = $2`,
+        [prevBlockId, deletedBlockId]
+      );
+    } else {
+      await client.query(
+        `UPDATE cue SET start_kind='block', start_block_id=$1, start_offset=0, warning=TRUE
+         WHERE start_block_id = $2`,
+        [nextBlockId, deletedBlockId]
+      );
+    }
+    // Replace end anchors; mark warning because position has shifted
+    if (prevBlockId) {
+      await client.query(
+        `UPDATE cue SET end_kind='gap', end_block_id=$1, end_offset=NULL, warning=TRUE
+         WHERE end_block_id = $2`,
+        [prevBlockId, deletedBlockId]
+      );
+    } else {
+      await client.query(
+        `UPDATE cue SET end_kind='block', end_block_id=$1, end_offset=0, warning=TRUE
+         WHERE end_block_id = $2`,
+        [nextBlockId, deletedBlockId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Called when a block's text content changes.
+ * Adjusts cue offsets that reference this block using the three-tier algorithm.
+ */
+export async function handleBlockContentChanged(
+  blockId: string,
+  oldContent: string,
+  newContent: string,
+): Promise<void> {
+  if (oldContent === newContent) return;
+
+  const res = await getPool().query<CueRow>(
+    `SELECT id, cue_list_id, number, name, content,
+            start_kind, start_block_id, start_offset,
+            end_kind, end_block_id, end_offset, warning
+     FROM cue
+     WHERE (start_kind='block' AND start_block_id=$1)
+        OR (end_kind='block' AND end_block_id=$1)`,
+    [blockId]
+  );
+  if (!res.rows.length) return;
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    for (const row of res.rows) {
+      const startInBlock = row.start_kind === "block" && row.start_block_id === blockId;
+      const endInBlock   = row.end_kind   === "block" && row.end_block_id   === blockId;
+
+      let newStartOffset = row.start_offset;
+      let newEndOffset   = row.end_offset;
+      let warn = row.warning;
+
+      if (startInBlock && endInBlock) {
+        // Same-block range or point cue — use full algorithm
+        const result = adjustBlockAnchor(
+          oldContent, newContent,
+          row.start_offset!, row.end_offset!
+        );
+        newStartOffset = result.startOffset;
+        newEndOffset   = result.endOffset;
+        if (result.warning) warn = true;
+      } else {
+        // Cross-block cue: adjust just the endpoint that lives in this block
+        if (startInBlock) {
+          newStartOffset = lcsAdjust(oldContent, newContent, row.start_offset!);
+        }
+        if (endInBlock) {
+          newEndOffset = lcsAdjust(oldContent, newContent, row.end_offset!);
+        }
+      }
+
+      if (newStartOffset !== row.start_offset || newEndOffset !== row.end_offset || warn !== row.warning) {
+        await client.query(
+          `UPDATE cue SET start_offset=$1, end_offset=$2, warning=$3 WHERE id=$4`,
+          [newStartOffset, newEndOffset, warn, row.id]
+        );
+      }
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function upsertProductionMemberWithRoles(

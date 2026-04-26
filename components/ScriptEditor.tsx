@@ -860,12 +860,14 @@ function BlockCharacterSelector({
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Derived: open when token increments (React during-render setState pattern)
-  const [lastSeenToken, setLastSeenToken] = useState(editRequestToken);
-  if (lastSeenToken !== editRequestToken && editRequestToken > 0) {
-    setLastSeenToken(editRequestToken);
-    setEditingWithNotify(true);
-  }
+  // Open editing when token increments (token changes on each external open request)
+  const prevTokenRef = useRef(editRequestToken);
+  useEffect(() => {
+    if (editRequestToken > 0 && editRequestToken !== prevTokenRef.current) {
+      prevTokenRef.current = editRequestToken;
+      setEditingWithNotify(true);
+    }
+  }, [editRequestToken, setEditingWithNotify]);
 
   // Focus input whenever editing mode activates; auto-expand annotations if any exist
   useEffect(() => {

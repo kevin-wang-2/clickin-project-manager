@@ -23,7 +23,9 @@ export type Permission =
   | "script:comment"        // any member
   | "script:rehearsal_mark" // 编剧, 制作人, 戏剧构作, 作曲, 作曲助理, 编曲
   | "script:metadata"       // 编剧, 制作人, 戏剧构作
-  | "script:edit";          // 编剧, 制作人
+  | "script:edit"           // 编剧, 制作人
+  | "cue:read"              // any member
+  | "cue:create";           // designers, 舞台监督, 导演, 制作人, 作曲, 编曲
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
   manage_permissions:    "管理成员权限",
@@ -34,11 +36,14 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "script:rehearsal_mark": "排练记号",
   "script:metadata":     "角色/章节信息",
   "script:edit":         "剧本文本编辑",
+  "cue:read":            "查看Cue表",
+  "cue:create":          "创建Cue表",
 };
 
 export const PERMISSION_GROUPS: { label: string; perms: Permission[] }[] = [
   { label: "通讯录", perms: ["view_contacts", "import_contacts"] },
   { label: "剧本",   perms: ["script:read", "script:comment", "script:rehearsal_mark", "script:metadata", "script:edit"] },
+  { label: "Cue表",  perms: ["cue:read", "cue:create"] },
   { label: "管理",   perms: ["manage_permissions"] },
 ];
 
@@ -56,6 +61,8 @@ const ROLE_PERMISSIONS: Record<Permission, PermConfig> = {
   "script:rehearsal_mark": { roles: new Set(["编剧", "制作人", "戏剧构作", "作曲", "作曲助理", "编曲"]),             adminBypass: false },
   "script:metadata":       { roles: new Set(["编剧", "制作人", "戏剧构作"]),                                        adminBypass: false },
   "script:edit":           { roles: new Set(["编剧", "制作人"]),                                                    adminBypass: false },
+  "cue:read":              { roles: null,                                                                           adminBypass: true  },
+  "cue:create":            { roles: new Set(["灯光设计", "音响设计", "多媒体设计", "服化设计", "舞美设计", "舞台监督", "导演", "制作人", "作曲", "编曲"]), adminBypass: true },
 };
 
 export type PermissionOverrides = Map<Permission, boolean>;

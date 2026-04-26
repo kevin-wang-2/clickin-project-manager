@@ -2,7 +2,12 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
-import { canUserAccessProduction, getProductionName } from "@/lib/db";
+import {
+  canUserAccessProduction, getProductionName,
+  getProductionMemberContext, listCueLists, listCueListPermissions,
+  countWarningCues,
+} from "@/lib/db";
+import { canEditCueList } from "@/lib/cue-list-types";
 
 export default async function ProductionDashboard({
   params,
@@ -19,8 +24,22 @@ export default async function ProductionDashboard({
     if (!ok) redirect("/");
   }
 
-  const name = await getProductionName(id);
+  const [name, cueLists, { memberRoles }] = await Promise.all([
+    getProductionName(id),
+    listCueLists(id),
+    getProductionMemberContext(session.openId, session.isAdmin, id),
+  ]);
   if (!name) redirect("/");
+
+  const editableListIds: string[] = [];
+  await Promise.all(
+    cueLists.map(async (cl) => {
+      const perms = await listCueListPermissions(cl.id);
+      if (canEditCueList(session.openId, memberRoles, session.isAdmin, cl, perms))
+        editableListIds.push(cl.id);
+    })
+  );
+  const warningCount = await countWarningCues(editableListIds);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-100 px-4">
@@ -49,10 +68,22 @@ export default async function ProductionDashboard({
           </Link>
           <Link
             href={`/production/${id}/script`}
-            className="col-span-2 rounded-2xl bg-white px-4 py-8 shadow-sm text-center hover:shadow-md transition-shadow"
+            className="rounded-2xl bg-white px-4 py-8 shadow-sm text-center hover:shadow-md transition-shadow"
           >
             <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase mb-1">Script</p>
             <p className="text-base font-medium text-zinc-700">剧本</p>
+          </Link>
+          <Link
+            href={`/production/${id}/cues`}
+            className="relative rounded-2xl bg-white px-4 py-8 shadow-sm text-center hover:shadow-md transition-shadow"
+          >
+            {warningCount > 0 && (
+              <span className="absolute top-2.5 right-2.5 flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600">
+                ⚠ {warningCount}
+              </span>
+            )}
+            <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase mb-1">Cue</p>
+            <p className="text-base font-medium text-zinc-700">Cue视图</p>
           </Link>
         </div>
       </div>

@@ -111,6 +111,52 @@ CREATE TABLE IF NOT EXISTS block_comment (
 CREATE INDEX IF NOT EXISTS block_comment_production_idx ON block_comment(production_id);
 CREATE INDEX IF NOT EXISTS block_comment_block_idx ON block_comment(production_id, block_id);
 
+-- ── Cue lists ─────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS cue_list (
+  id                 TEXT PRIMARY KEY,
+  production_id      TEXT NOT NULL REFERENCES production(id) ON DELETE CASCADE,
+  name               TEXT NOT NULL,
+  notes              TEXT NOT NULL DEFAULT '',
+  template           TEXT,
+  default_edit_roles TEXT[] NOT NULL DEFAULT '{}',
+  created_by         TEXT NOT NULL REFERENCES feishu_user(open_id),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS cue_list_production_idx ON cue_list(production_id, created_at);
+
+CREATE TABLE IF NOT EXISTS cue_list_permission (
+  cue_list_id TEXT    NOT NULL REFERENCES cue_list(id) ON DELETE CASCADE,
+  open_id     TEXT    NOT NULL REFERENCES feishu_user(open_id) ON DELETE CASCADE,
+  can_edit    BOOLEAN NOT NULL,
+  PRIMARY KEY (cue_list_id, open_id)
+);
+
+-- ── Cues ─────────────────────────────────────────────────────────────────────
+-- Anchor kinds: 'block' = precise char offset within a block;
+--               'gap'   = the visual whitespace after a block (before next block)
+-- Point cue: start == end (both kind+blockId+offset identical)
+-- warning: set when drift detection couldn't find a confident match
+
+CREATE TABLE IF NOT EXISTS cue (
+  id              TEXT    PRIMARY KEY,
+  cue_list_id     TEXT    NOT NULL REFERENCES cue_list(id) ON DELETE CASCADE,
+  number          TEXT    NOT NULL,
+  name            TEXT    NOT NULL DEFAULT '',
+  content         TEXT    NOT NULL DEFAULT '',
+  start_kind      TEXT    NOT NULL CHECK(start_kind IN ('block','gap')),
+  start_block_id  TEXT    NOT NULL,
+  start_offset    INTEGER,            -- null when start_kind='gap'
+  end_kind        TEXT    NOT NULL CHECK(end_kind IN ('block','gap')),
+  end_block_id    TEXT    NOT NULL,
+  end_offset      INTEGER,            -- null when end_kind='gap'
+  warning         BOOLEAN NOT NULL DEFAULT FALSE,
+  UNIQUE(cue_list_id, number)
+);
+
+CREATE INDEX IF NOT EXISTS cue_list_idx ON cue(cue_list_id);
+
 -- ── Per-member permission overrides ──────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS production_member_permission (
