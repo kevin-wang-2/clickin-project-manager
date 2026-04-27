@@ -25,32 +25,58 @@ export type Permission =
   | "script:metadata"       // 编剧, 制作人, 戏剧构作
   | "script:edit"           // 编剧, 制作人
   | "cue:read"              // any member
-  | "cue:create";           // designers, 舞台监督, 导演, 制作人, 作曲, 编曲
+  | "cue:create"            // designers, 舞台监督, 导演, 制作人, 作曲, 编曲
+  // ── Departments (HR layer) ─────────────────────────────────────────────────
+  | "dept:manage"           // 制作人, 制作助理
+  // ── Events (role-based; contextual checks live in event-permissions.ts) ───
+  | "event:create"          // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:edit"            // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:publish"         // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:view_full"       // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:call_edit"       // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:tech_req_delete" // 制作人, 制作助理, 舞台监督, 助理舞台监督
+  | "event:schedule_edit"   // above + 导演, 导演助理
+  | "event:assign_people"   // above + 导演, 导演助理
+  | "event:follow";         // any production member
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
-  manage_permissions:    "管理成员权限",
-  import_contacts:       "导入/更新人员",
-  view_contacts:         "查看通讯录",
-  "script:read":         "查看剧本",
-  "script:comment":      "剧本评论",
+  manage_permissions:      "管理成员权限",
+  import_contacts:         "导入/更新人员",
+  view_contacts:           "查看通讯录",
+  "script:read":           "查看剧本",
+  "script:comment":        "剧本评论",
   "script:rehearsal_mark": "排练记号",
-  "script:metadata":     "角色/章节信息",
-  "script:edit":         "剧本文本编辑",
-  "cue:read":            "查看Cue表",
-  "cue:create":          "创建Cue表",
+  "script:metadata":       "角色/章节信息",
+  "script:edit":           "剧本文本编辑",
+  "cue:read":              "查看Cue表",
+  "cue:create":            "创建Cue表",
+  "dept:manage":           "管理部门",
+  "event:create":          "创建事件",
+  "event:edit":            "编辑事件",
+  "event:publish":         "发布事件",
+  "event:view_full":       "完整查看事件",
+  "event:call_edit":       "设置Call Time",
+  "event:tech_req_delete": "删除技术需求",
+  "event:schedule_edit":   "编辑子事件",
+  "event:assign_people":   "绑定参与人员",
+  "event:follow":          "关注事件",
 };
 
 export const PERMISSION_GROUPS: { label: string; perms: Permission[] }[] = [
   { label: "通讯录", perms: ["view_contacts", "import_contacts"] },
   { label: "剧本",   perms: ["script:read", "script:comment", "script:rehearsal_mark", "script:metadata", "script:edit"] },
   { label: "Cue表",  perms: ["cue:read", "cue:create"] },
-  { label: "管理",   perms: ["manage_permissions"] },
+  { label: "事件",   perms: ["event:follow", "event:view_full", "event:create", "event:edit", "event:publish", "event:schedule_edit", "event:assign_people", "event:call_edit", "event:tech_req_delete"] },
+  { label: "管理",   perms: ["dept:manage", "manage_permissions"] },
 ];
 
 type PermConfig = {
   roles: Set<string> | null; // null = any member
   adminBypass: boolean;      // false = superadmin must also hold a qualifying role
 };
+
+const SM_ROLES = new Set(["制作人", "制作助理", "舞台监督", "助理舞台监督"]);
+const SM_AND_DIRECTOR_ROLES = new Set([...SM_ROLES, "导演", "导演助理"]);
 
 const ROLE_PERMISSIONS: Record<Permission, PermConfig> = {
   manage_permissions:      { roles: new Set(["制作人"]),                                                            adminBypass: true  },
@@ -63,6 +89,18 @@ const ROLE_PERMISSIONS: Record<Permission, PermConfig> = {
   "script:edit":           { roles: new Set(["编剧", "制作人"]),                                                    adminBypass: false },
   "cue:read":              { roles: null,                                                                           adminBypass: true  },
   "cue:create":            { roles: new Set(["灯光设计", "音响设计", "多媒体设计", "服化设计", "舞美设计", "舞台监督", "导演", "制作人", "作曲", "编曲"]), adminBypass: true },
+  // ── Departments ────────────────────────────────────────────────────────────
+  "dept:manage":           { roles: new Set(["制作人", "制作助理"]),          adminBypass: true  },
+  // ── Events ─────────────────────────────────────────────────────────────────
+  "event:create":          { roles: SM_ROLES,                                adminBypass: true  },
+  "event:edit":            { roles: SM_ROLES,                                adminBypass: true  },
+  "event:publish":         { roles: SM_ROLES,                                adminBypass: true  },
+  "event:view_full":       { roles: SM_ROLES,                                adminBypass: true  },
+  "event:call_edit":       { roles: SM_ROLES,                                adminBypass: true  },
+  "event:tech_req_delete": { roles: SM_ROLES,                                adminBypass: true  },
+  "event:schedule_edit":   { roles: SM_AND_DIRECTOR_ROLES,                   adminBypass: true  },
+  "event:assign_people":   { roles: SM_AND_DIRECTOR_ROLES,                   adminBypass: true  },
+  "event:follow":          { roles: null,                                    adminBypass: true  },
 };
 
 export type PermissionOverrides = Map<Permission, boolean>;
