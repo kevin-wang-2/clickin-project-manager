@@ -9,6 +9,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
+import { verifyCardToken } from "@/lib/card-token";
 import { getPool } from "@/lib/pg";
 
 function fmtTime(iso: string): string {
@@ -36,14 +37,23 @@ function tomorrowCSTStr(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-type Ctx = { searchParams: Promise<{ date?: string }> };
+type Ctx = { searchParams: Promise<{ date?: string; t?: string }> };
 
 export default async function DailyCallPage({ searchParams }: Ctx) {
   const cookieStore = await cookies();
   const session = getSession(cookieStore);
-  if (!session) redirect("/login");
 
-  const { date: dateParam } = await searchParams;
+  const { date: dateParam, t: tokenParam } = await searchParams;
+
+  let openId: string;
+  if (session) {
+    openId = session.openId;
+  } else {
+    const tokenData = tokenParam ? verifyCardToken(tokenParam, "daily-call") : null;
+    if (!tokenData) redirect("/login");
+    openId = tokenData.openId;
+  }
+  const isTokenMode = !session;
   const dateStr = (dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam)) ? dateParam : tomorrowCSTStr();
   const { start, end } = cstDateToUtcRange(dateStr);
 
@@ -63,7 +73,7 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
      JOIN production p ON p.id = pe.production_id
      WHERE ect.open_id = $1 AND ect.call_at >= $2 AND ect.call_at < $3
      ORDER BY pe.title`,
-    [session.openId, start.toISOString(), end.toISOString()],
+    [openId, start.toISOString(), end.toISOString()],
   );
 
   const eventIds = eventsRes.rows.map(r => r.event_id);
@@ -73,7 +83,7 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
       <div className="min-h-screen bg-zinc-100">
         <div className="max-w-lg mx-auto px-4 pt-8 pb-16">
           <div className="mb-6 flex items-center justify-between">
-            <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>
+            {!isTokenMode && <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>}
             <h1 className="text-sm font-bold tracking-[0.15em] text-zinc-400 uppercase">
             当日 Call Sheet <span className="font-normal normal-case text-zinc-300 text-xs">UTC+8</span>
           </h1>
@@ -132,7 +142,7 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
     <div className="min-h-screen bg-zinc-100">
       <div className="max-w-lg mx-auto px-4 pt-8 pb-16">
         <div className="mb-2 flex items-center justify-between">
-          <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>
+          {!isTokenMode && <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>}
           <h1 className="text-sm font-bold tracking-[0.15em] text-zinc-400 uppercase">
             当日 Call Sheet <span className="font-normal normal-case text-zinc-300 text-xs">UTC+8</span>
           </h1>
@@ -141,7 +151,7 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
 
         <div className="flex flex-col gap-5">
           {eventsRes.rows.map(ev => {
-            const myCalls = (callsByEvent.get(ev.event_id) ?? []).filter(c => c.open_id === session.openId);
+            const myCalls = (callsByEvent.get(ev.event_id) ?? []).filter(c => c.open_id === openId);
             const allCalls = (callsByEvent.get(ev.event_id) ?? []);
             const schedItems = (schedsByEvent.get(ev.event_id) ?? []).sort((a, b) => {
               if (!a.start_time && !b.start_time) return a.order_index - b.order_index;
@@ -162,11 +172,13 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
                         <p className="text-xs text-zinc-400 mt-0.5">📍 {ev.event_location}</p>
                       )}
                     </div>
-                    <Link
-                      href={`/production/${ev.production_id}/events/${ev.event_id}/callsheet`}
-                      className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 mt-1">
-                      完整 →
-                    </Link>
+                    {!isTokenMode && (
+                      <Link
+                        href={`/production/${ev.production_id}/events/${ev.event_id}/callsheet`}
+                        className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 mt-1">
+                        完整 →
+                      </Link>
+                    )}
                   </div>
 
                   {/* My call times */}
@@ -216,7 +228,7 @@ export default async function DailyCallPage({ searchParams }: Ctx) {
                       {allCalls.map((c, i) => (
                         <div key={i} className="flex items-baseline gap-2">
                           <span className="shrink-0 font-mono text-xs text-zinc-500 w-10">{fmtTime(c.call_at)}</span>
-                          <span className={`text-sm ${c.open_id === session.openId ? "font-semibold text-zinc-800" : "text-zinc-600"}`}>
+                          <span className={`text-sm ${c.open_id === openId ? "font-semibold text-zinc-800" : "text-zinc-600"}`}>
                             {c.name}
                           </span>
                           {c.notes && <span className="text-[11px] text-zinc-300">{c.notes}</span>}
