@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { MemberWithRoles } from "@/lib/db";
+import type { EventDepartment } from "@/lib/event-db";
 import { ROLE_GROUPS, PERMISSION_GROUPS, PERMISSION_LABELS, roleBasedPermission, type Permission } from "@/lib/roles";
 
 const ROLE_ORDER = ROLE_GROUPS.flatMap((g) => g.roles);
@@ -284,6 +285,316 @@ function ImportPanel({
   );
 }
 
+// ─── DepartmentPanel ──────────────────────────────────────────────────────────
+
+function DepartmentPanel({
+  productionId,
+  initialDepartments,
+  members,
+}: {
+  productionId: string;
+  initialDepartments: EventDepartment[];
+  members: MemberWithRoles[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [departments, setDepartments] = useState<EventDepartment[]>(initialDepartments);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [creatingKind, setCreatingKind] = useState<"dept" | "group" | null>(null);
+  const [newName, setNewName] = useState("");
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const depts = departments.filter((d) => d.kind === "dept");
+  const groups = departments.filter((d) => d.kind === "group");
+
+  const handleCreate = async (kind: "dept" | "group") => {
+    if (!newName.trim() || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/departments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), kind }),
+      });
+      const data = await res.json();
+      if (data.department) {
+        setDepartments((prev) => [...prev, data.department]);
+        setNewName("");
+        setCreatingKind(null);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveName = async (id: string) => {
+    if (!editName.trim() || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/departments/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName.trim() }),
+      });
+      const data = await res.json();
+      if (data.department) {
+        setDepartments((prev) => prev.map((d) => (d.id === id ? data.department : d)));
+        setEditingId(null);
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("确定删除？删除后无法恢复。")) return;
+    await fetch(`${BASE_PATH}/api/production/${productionId}/departments/${id}`, { method: "DELETE" });
+    setDepartments((prev) => prev.filter((d) => d.id !== id));
+    if (expandedId === id) setExpandedId(null);
+    if (editingId === id) setEditingId(null);
+  };
+
+  const saveDeptMembers = async (dept: EventDepartment, newMembers: { openId: string; isPoc: boolean }[]) => {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/departments/${dept.id}/members`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ members: newMembers }),
+    });
+    const data = await res.json();
+    if (data.department) {
+      setDepartments((prev) => prev.map((d) => (d.id === dept.id ? data.department : d)));
+    }
+  };
+
+  const handleToggleMember = (dept: EventDepartment, openId: string) => {
+    const isMember = dept.memberOpenIds.includes(openId);
+    const newMembers = isMember
+      // Removing: drop the member (and their POC status implicitly)
+      ? dept.memberOpenIds
+          .filter((id) => id !== openId)
+          .map((id) => ({ openId: id, isPoc: dept.pocOpenIds.includes(id) }))
+      // Adding: append as plain member (not POC)
+      : [
+          ...dept.memberOpenIds.map((id) => ({ openId: id, isPoc: dept.pocOpenIds.includes(id) })),
+          { openId, isPoc: false },
+        ];
+    saveDeptMembers(dept, newMembers);
+  };
+
+  const handleTogglePoc = (dept: EventDepartment, openId: string) => {
+    if (!dept.memberOpenIds.includes(openId)) return;
+    const isPoc = dept.pocOpenIds.includes(openId);
+    const newMembers = dept.memberOpenIds.map((id) => ({
+      openId: id,
+      isPoc: id === openId ? !isPoc : dept.pocOpenIds.includes(id),
+    }));
+    saveDeptMembers(dept, newMembers);
+  };
+
+  const renderRow = (dept: EventDepartment) => {
+    const isExpanded = expandedId === dept.id;
+    const isEditing = editingId === dept.id;
+    const summary = dept.memberOpenIds.length > 0
+      ? `${dept.memberOpenIds.length} 位成员${dept.pocOpenIds.length > 0 ? `，${dept.pocOpenIds.length} 位 POC` : ""}`
+      : "";
+    const filtered = search
+      ? members.filter((m) => m.name.includes(search) || m.roles.some((r) => r.includes(search)))
+      : members;
+
+    return (
+      <div key={dept.id} className="border-b border-zinc-100 last:border-0">
+        <div className="flex items-center gap-2 px-3 py-2.5">
+          {isEditing ? (
+            <>
+              <input
+                autoFocus
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveName(dept.id);
+                  if (e.key === "Escape") setEditingId(null);
+                }}
+                className="flex-1 rounded border border-zinc-300 px-2 py-0.5 text-sm outline-none focus:border-zinc-500"
+              />
+              <button
+                onClick={() => handleSaveName(dept.id)}
+                disabled={saving}
+                className="text-xs text-zinc-600 hover:text-zinc-800 disabled:opacity-30"
+              >
+                保存
+              </button>
+              <button onClick={() => setEditingId(null)} className="text-xs text-zinc-300 hover:text-zinc-500">
+                取消
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => { setExpandedId(isExpanded ? null : dept.id); setSearch(""); }}
+                className="flex-1 flex items-center gap-2 text-left min-w-0"
+              >
+                <span className="text-sm text-zinc-700 truncate">{dept.name}</span>
+                {summary && (
+                  <span className="shrink-0 text-[11px] text-zinc-400">{summary}</span>
+                )}
+                <span className="ml-auto shrink-0 text-zinc-300 text-xs">{isExpanded ? "▲" : "▼"}</span>
+              </button>
+              <button
+                onClick={() => { setEditingId(dept.id); setEditName(dept.name); setExpandedId(null); }}
+                className="shrink-0 text-[11px] text-zinc-300 hover:text-zinc-500 px-1 transition-colors"
+              >
+                改名
+              </button>
+              <button
+                onClick={() => handleDelete(dept.id)}
+                className="shrink-0 text-[11px] text-zinc-300 hover:text-red-400 px-1 transition-colors"
+              >
+                删除
+              </button>
+            </>
+          )}
+        </div>
+
+        {isExpanded && (
+          <div className="px-3 pb-3 border-t border-zinc-50">
+            {/* Column headers */}
+            <div className="flex items-center pt-2.5 pb-1.5 pr-1">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索姓名或职位…"
+                className="flex-1 rounded border border-zinc-200 px-2 py-1.5 text-xs outline-none focus:border-zinc-400"
+              />
+              <div className="flex gap-3 ml-3 shrink-0">
+                <span className="text-[11px] font-medium text-zinc-400 w-8 text-center">成员</span>
+                <span className="text-[11px] font-medium text-zinc-400 w-8 text-center">POC</span>
+              </div>
+            </div>
+
+            <div className="space-y-0.5 max-h-52 overflow-y-auto mt-1">
+              {filtered.map((m) => {
+                const isMember = dept.memberOpenIds.includes(m.openId);
+                const isPoc = dept.pocOpenIds.includes(m.openId);
+                return (
+                  <div
+                    key={m.openId}
+                    className={`flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors ${
+                      isMember ? "bg-zinc-50" : ""
+                    }`}
+                  >
+                    <span className="flex-1 truncate text-sm text-zinc-700 font-medium">{m.name}</span>
+                    {m.roles.length > 0 && (
+                      <span className="text-[11px] text-zinc-400 shrink-0 mr-1">{m.roles[0]}</span>
+                    )}
+                    {/* 成员 toggle */}
+                    <button
+                      onClick={() => handleToggleMember(dept, m.openId)}
+                      className={`w-8 h-5 rounded-full transition-colors shrink-0 ${
+                        isMember ? "bg-zinc-700" : "bg-zinc-200 hover:bg-zinc-300"
+                      }`}
+                      aria-label={isMember ? "移除成员" : "添加成员"}
+                    >
+                      <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow-sm transition-transform mx-auto ${
+                        isMember ? "translate-x-1.5" : "-translate-x-1.5"
+                      }`} />
+                    </button>
+                    {/* POC toggle — only enabled if member */}
+                    <button
+                      onClick={() => handleTogglePoc(dept, m.openId)}
+                      disabled={!isMember}
+                      className={`w-8 h-5 rounded-full transition-colors shrink-0 ${
+                        isPoc ? "bg-amber-500" : isMember ? "bg-zinc-200 hover:bg-zinc-300" : "bg-zinc-100 cursor-not-allowed"
+                      }`}
+                      aria-label={isPoc ? "取消 POC" : "设为 POC"}
+                    >
+                      <span className={`block w-3.5 h-3.5 rounded-full bg-white shadow-sm transition-transform mx-auto ${
+                        isPoc ? "translate-x-1.5" : "-translate-x-1.5"
+                      }`} />
+                    </button>
+                  </div>
+                );
+              })}
+              {filtered.length === 0 && (
+                <p className="text-xs text-zinc-300 py-2 text-center">没有匹配的人员</p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSection = (label: string, kind: "dept" | "group", items: EventDepartment[]) => (
+    <div className="mb-5">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[11px] font-semibold tracking-widest text-zinc-400 uppercase">{label}</p>
+        <button
+          onClick={() => { setCreatingKind(kind); setNewName(""); setExpandedId(null); }}
+          className="text-[11px] text-zinc-400 hover:text-zinc-700 transition-colors"
+        >
+          + 新建
+        </button>
+      </div>
+      <div className="rounded-xl border border-zinc-100 overflow-hidden bg-white">
+        {items.length === 0 && creatingKind !== kind && (
+          <p className="px-3 py-3 text-xs text-zinc-300">暂无{label}</p>
+        )}
+        {items.map(renderRow)}
+        {creatingKind === kind && (
+          <div className="flex items-center gap-2 border-t border-zinc-100 px-3 py-2.5">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreate(kind);
+                if (e.key === "Escape") setCreatingKind(null);
+              }}
+              placeholder={`${label}名称`}
+              className="flex-1 rounded border border-zinc-200 px-2 py-1.5 text-sm outline-none focus:border-zinc-400"
+            />
+            <button
+              onClick={() => handleCreate(kind)}
+              disabled={saving || !newName.trim()}
+              className="text-xs text-zinc-600 hover:text-zinc-800 disabled:opacity-30"
+            >
+              保存
+            </button>
+            <button onClick={() => setCreatingKind(null)} className="text-xs text-zinc-300 hover:text-zinc-500">
+              取消
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-2xl bg-white shadow-sm overflow-hidden mb-6">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors"
+      >
+        <span>
+          部门 & 用户组
+          {departments.length > 0 && (
+            <span className="ml-2 text-xs font-normal text-zinc-400">{departments.length} 个</span>
+          )}
+        </span>
+        <span className="text-zinc-300 text-base">{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <div className="px-5 pb-5 border-t border-zinc-100 pt-4">
+          {renderSection("部门", "dept", depts)}
+          {renderSection("用户组", "group", groups)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ContactsClient ───────────────────────────────────────────────────────────
 
 type Props = {
@@ -293,6 +604,8 @@ type Props = {
   canImport: boolean;
   canManage: boolean;
   initialOverrides: Record<string, Record<string, boolean>>;
+  canManageDepts: boolean;
+  initialDepartments: EventDepartment[];
 };
 
 export default function ContactsClient({
@@ -302,6 +615,8 @@ export default function ContactsClient({
   canImport,
   canManage,
   initialOverrides,
+  canManageDepts,
+  initialDepartments,
 }: Props) {
   const [members, setMembers] = useState<MemberWithRoles[]>(initialMembers);
   const [overrides, setOverrides] = useState<Record<string, Record<string, boolean>>>(initialOverrides);
@@ -338,6 +653,14 @@ export default function ContactsClient({
 
         {canImport && (
           <ImportPanel productionId={productionId} onImported={setMembers} />
+        )}
+
+        {canManageDepts && (
+          <DepartmentPanel
+            productionId={productionId}
+            initialDepartments={initialDepartments}
+            members={members}
+          />
         )}
 
         {sorted.length === 0 ? (
