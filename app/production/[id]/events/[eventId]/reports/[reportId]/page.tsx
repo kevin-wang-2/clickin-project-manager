@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
+import { verifyCardToken } from "@/lib/card-token";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import {
@@ -18,15 +19,59 @@ import {
 } from "@/lib/event-permissions";
 import ReportViewClient from "@/components/ReportViewClient";
 
-type Ctx = { params: Promise<{ id: string; eventId: string; reportId: string }> };
+type Ctx = {
+  params: Promise<{ id: string; eventId: string; reportId: string }>;
+  searchParams: Promise<{ t?: string }>;
+};
 
 const VISIBLE_STATUSES = new Set(["published", "completed"]);
 
-export default async function ReportViewPage({ params }: Ctx) {
+export default async function ReportViewPage({ params, searchParams }: Ctx) {
   const { id: productionId, eventId, reportId } = await params;
   const cookieStore = await cookies();
   const session = getSession(cookieStore);
-  if (!session) redirect("/login");
+
+  const { t: tokenParam } = await searchParams;
+
+  // Token mode: card link with embedded openId, view-only, no permission checks
+  if (!session) {
+    const tokenData = tokenParam
+      ? verifyCardToken(tokenParam, `report:${reportId}`)
+      : null;
+    if (!tokenData) redirect("/login");
+
+    const event = await getProductionEvent(eventId, productionId);
+    if (!event) redirect(`/production/${productionId}/events`);
+
+    const report = await getEventReport(reportId, eventId);
+    if (!report || !report.publishedAt) redirect("/login");
+
+    const [notes, departments, replies] = await Promise.all([
+      listReportNotes(reportId),
+      listEventDepartments(productionId),
+      listReportReplies(reportId),
+    ]);
+
+    await markReportRead(reportId, tokenData.openId);
+
+    return (
+      <ReportViewClient
+        productionId={productionId}
+        eventId={eventId}
+        event={event}
+        report={report}
+        notes={notes}
+        departments={departments.filter(d => d.kind === "dept")}
+        canWriteNote={false}
+        canModerateNotes={false}
+        currentUserOpenId={tokenData.openId}
+        isPublished={true}
+        replies={replies}
+        canReply={false}
+        memberDeptIds={[]}
+      />
+    );
+  }
 
   const { memberRoles, overrides } = await getProductionMemberContext(session.openId, session.isAdmin, productionId);
   if (!hasPermission("event:follow", session.isAdmin, memberRoles, overrides)) redirect("/");
@@ -56,7 +101,6 @@ export default async function ReportViewPage({ params }: Ctx) {
     listReportReplies(reportId),
   ]);
 
-  // Mark as read (server-side, fire and forget the promise is fine here)
   if (report.publishedAt) {
     await markReportRead(reportId, session.openId);
   }

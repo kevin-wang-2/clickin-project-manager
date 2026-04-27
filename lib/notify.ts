@@ -9,6 +9,7 @@ import {
   sendCard, buildWeeklyCallCard, buildDailyCallCard, buildReportCard,
   type WeeklyCallEntry, type DailyCallScheduleItem,
 } from "./feishu-bot";
+import { createCardToken } from "./card-token";
 
 function appBaseUrl(): string {
   return (process.env.APP_BASE_URL ?? "http://localhost:3000") + BASE_PATH;
@@ -109,7 +110,9 @@ export async function dispatchWeeklyCall(dryRun = false): Promise<DispatchResult
     [weekStart.toISOString(), weekEnd.toISOString()],
   );
 
-  const weeklyUrl = `${base}/my/weekly-call`;
+  const weeklyBaseUrl = `${base}/my/weekly-call`;
+  // Token valid for 8 days — covers the full week shown in the card
+  const weeklyTokenExp = new Date(Date.now() + 8 * 24 * 3_600_000);
 
   let sent = 0;
   const errors: string[] = [];
@@ -119,6 +122,8 @@ export async function dispatchWeeklyCall(dryRun = false): Promise<DispatchResult
     try {
       const entries = await getWeeklyCallDataForUser(open_id, weekStart, weekEnd);
       if (!entries.length) continue;
+      const token = createCardToken(open_id, "weekly-call", weeklyTokenExp);
+      const weeklyUrl = `${weeklyBaseUrl}?t=${token}`;
       const card = buildWeeklyCallCard(entries, weeklyUrl);
       if (dryRun) {
         dryCards.push({ openId: open_id, card });
@@ -256,7 +261,11 @@ export async function dispatchDailyCallForEvent(eventId: string, dryRun = false)
   // CST date string "YYYY-MM-DD" for the event's start day
   const cstDate = new Date(new Date(event.start_time).getTime() + 8 * 3_600_000);
   const dateStr = `${cstDate.getUTCFullYear()}-${String(cstDate.getUTCMonth() + 1).padStart(2, "0")}-${String(cstDate.getUTCDate()).padStart(2, "0")}`;
-  const callsheetUrl = `${base}/my/daily-call?date=${dateStr}`;
+  const callsheetBaseUrl = `${base}/my/daily-call?date=${dateStr}`;
+  // Token valid until the day after the event at 12:00 CST (= 04:00 UTC)
+  const dailyTokenExp = new Date(Date.UTC(
+    cstDate.getUTCFullYear(), cstDate.getUTCMonth(), cstDate.getUTCDate() + 1, 4, 0, 0, 0,
+  ));
 
   let sent = 0;
   const errors: string[] = [];
@@ -267,6 +276,8 @@ export async function dispatchDailyCallForEvent(eventId: string, dryRun = false)
     if (seen.has(row.open_id)) continue;
     seen.add(row.open_id);
     try {
+      const token = createCardToken(row.open_id, "daily-call", dailyTokenExp);
+      const callsheetUrl = `${callsheetBaseUrl}&t=${token}`;
       const card = buildDailyCallCard(
         event.title, event.location, event.start_time,
         row.call_at, row.notes,
@@ -340,8 +351,8 @@ export async function dispatchReportNotification(
   );
   if (!recipRes.rows.length) return { sent: 0, errors: [] };
 
-  const url = `${base}/production/${productionId}/events/${eventId}/reports/${reportId}`;
-  const card = buildReportCard(report.title, eventTitle, report.body, notes, report.published_at, url);
+  const reportBaseUrl = `${base}/production/${productionId}/events/${eventId}/reports/${reportId}`;
+  const reportTokenExp = new Date(Date.now() + 30 * 24 * 3_600_000);
 
   let sent = 0;
   const errors: string[] = [];
@@ -349,6 +360,9 @@ export async function dispatchReportNotification(
 
   for (const { open_id } of recipRes.rows) {
     try {
+      const token = createCardToken(open_id, `report:${reportId}`, reportTokenExp);
+      const url = `${reportBaseUrl}?t=${token}`;
+      const card = buildReportCard(report.title, eventTitle, report.body, notes, report.published_at, url);
       if (dryRun) {
         dryCards.push({ openId: open_id, card });
       } else {

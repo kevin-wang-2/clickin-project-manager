@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { getSession } from "@/lib/session";
+import { verifyCardToken } from "@/lib/card-token";
 import { getPool } from "@/lib/pg";
 
 function cstNow(): Date {
@@ -32,10 +33,23 @@ type CallRow = {
 type SchedRow = { event_id: string; title: string; start_time: string | null; order_index: number };
 type ReqRow = { event_id: string; title: string; status: string };
 
-export default async function WeeklyCallPage() {
+type Ctx = { searchParams: Promise<{ t?: string }> };
+
+export default async function WeeklyCallPage({ searchParams }: Ctx) {
   const cookieStore = await cookies();
   const session = getSession(cookieStore);
-  if (!session) redirect("/login");
+
+  const { t: tokenParam } = await searchParams;
+
+  let openId: string;
+  if (session) {
+    openId = session.openId;
+  } else {
+    const tokenData = tokenParam ? verifyCardToken(tokenParam, "weekly-call") : null;
+    if (!tokenData) redirect("/login");
+    openId = tokenData.openId;
+  }
+  const isTokenMode = !session;
 
   const pool = getPool();
 
@@ -65,7 +79,7 @@ export default async function WeeklyCallPage() {
        JOIN production p ON p.id = pe.production_id
        WHERE ect.open_id = $1 AND ect.call_at >= $2 AND ect.call_at < $3
        ORDER BY ect.call_at`,
-      [session.openId, weekStart.toISOString(), weekEnd.toISOString()],
+      [openId, weekStart.toISOString(), weekEnd.toISOString()],
     ),
     pool.query<SchedRow>(
       `SELECT esi.event_id, esi.title, esi.start_time, esi.order_index
@@ -75,7 +89,7 @@ export default async function WeeklyCallPage() {
          WHERE open_id = $1 AND call_at >= $2 AND call_at < $3
        )
        ORDER BY esi.event_id, esi.order_index`,
-      [session.openId, weekStart.toISOString(), weekEnd.toISOString()],
+      [openId, weekStart.toISOString(), weekEnd.toISOString()],
     ),
     pool.query<ReqRow>(
       `SELECT etr.event_id, etr.title, etr.status
@@ -85,7 +99,7 @@ export default async function WeeklyCallPage() {
          SELECT DISTINCT event_id FROM event_call_time
          WHERE open_id = $1 AND call_at >= $2 AND call_at < $3
        ) AND etr.status != 'done'`,
-      [session.openId, weekStart.toISOString(), weekEnd.toISOString()],
+      [openId, weekStart.toISOString(), weekEnd.toISOString()],
     ),
   ]);
 
@@ -117,7 +131,7 @@ export default async function WeeklyCallPage() {
     <div className="min-h-screen bg-zinc-100">
       <div className="max-w-lg mx-auto px-4 pt-8 pb-16">
         <div className="mb-6 flex items-center justify-between">
-          <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>
+          {!isTokenMode && <Link href={`/`} className="text-xs text-zinc-400 hover:text-zinc-600">← 返回</Link>}
           <h1 className="text-sm font-bold tracking-[0.15em] text-zinc-400 uppercase">
             本周 Call 安排 <span className="font-normal normal-case text-zinc-300 text-xs">UTC+8</span>
           </h1>
@@ -139,11 +153,13 @@ export default async function WeeklyCallPage() {
                         <p className="text-xs text-zinc-400 mt-0.5">📍 {ev.eventLocation}</p>
                       )}
                     </div>
-                    <Link
-                      href={`/production/${ev.productionId}/events/${ev.eventId}/callsheet`}
-                      className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 mt-1">
-                      Call Sheet →
-                    </Link>
+                    {!isTokenMode && (
+                      <Link
+                        href={`/production/${ev.productionId}/events/${ev.eventId}/callsheet`}
+                        className="shrink-0 text-[11px] text-zinc-400 hover:text-zinc-600 mt-1">
+                        Call Sheet →
+                      </Link>
+                    )}
                   </div>
 
                   {/* My call times */}
