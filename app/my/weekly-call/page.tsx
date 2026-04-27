@@ -39,11 +39,20 @@ export default async function WeeklyCallPage() {
 
   const pool = getPool();
 
-  // This week: today 00:00 CST → +7 days
-  const now = cstNow();
-  // today 00:00 CST = Date.UTC(cst_year, cst_month, cst_date) - 8h
-  const weekStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - 8 * 3_600_000);
-  const weekEnd = new Date(weekStart.getTime() + 7 * 24 * 3_600_000);
+  // Week range logic:
+  // - Before Sunday 12:00 CST: show this Mon 00:00 CST → next Mon 00:00 CST
+  // - After Sunday 12:00 CST (notification already sent): show next Mon → Mon+7
+  const now = cstNow(); // UTC+8 values accessible via getUTC*
+  const dow = now.getUTCDay(); // 0=Sun … 6=Sat in CST
+  const afterSundayNoon = dow === 0 && (now.getUTCHours() > 12 || (now.getUTCHours() === 12 && now.getUTCMinutes() >= 0));
+  // Days back to this Monday (Sun=6 days back, Mon=0, Tue=1, ...)
+  const daysFromMonday = dow === 0 ? 6 : dow - 1;
+  // Offset to apply: 0 = this week, +7 = next week
+  const weekOffset = afterSundayNoon ? 7 : 0;
+  const mondayCSTDate = now.getUTCDate() - daysFromMonday + weekOffset;
+  // Monday 00:00 CST in UTC = Date.UTC(y, m, d) - 8h
+  const weekStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), mondayCSTDate) - 8 * 3_600_000);
+  const weekEnd   = new Date(weekStart.getTime() + 7 * 24 * 3_600_000);
 
   const [callsRes, schedRes, reqsRes] = await Promise.all([
     pool.query<CallRow>(
