@@ -68,14 +68,14 @@ export async function scheduleOrDispatchDailyCall(eventId: string, startTime: st
 
 /** Computes D-1 at 12:00 CST (= 04:00 UTC) for a given startTime ISO string. */
 function computeDailyCallTime(startTime: string): Date {
-  const d = new Date(startTime);
-  // Midnight CST of start day = start day 00:00 CST = (start day - 16h) UTC
+  // Convert to CST date first — startTime may be e.g. "2026-04-28T16:00Z" (= 04/29 00:00 CST),
+  // so using UTC date directly would give D-1 off by one day.
+  const cst = new Date(new Date(startTime).getTime() + 8 * 3_600_000);
+  const y = cst.getUTCFullYear();
+  const m = cst.getUTCMonth();
+  const d = cst.getUTCDate();
   // D-1 at 12:00 CST = D-1 at 04:00 UTC
-  // Simpler: take the UTC date of startTime, go back 1 day, set to 04:00 UTC
-  const utcMidnight = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-  utcMidnight.setUTCDate(utcMidnight.getUTCDate() - 1);
-  utcMidnight.setUTCHours(4, 0, 0, 0); // 12:00 CST
-  return utcMidnight;
+  return new Date(Date.UTC(y, m, d - 1, 4, 0, 0, 0));
 }
 
 // ─── Weekly call dispatch ─────────────────────────────────────────────────────
