@@ -5,6 +5,7 @@ import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import { fmtDateTime as fmtDate } from "@/lib/tz";
 import Markdown from "./Markdown";
+import MentionTextarea, { type MentionMember } from "./MentionTextarea";
 import type { ProductionEvent, EventReport, EventReportNote, EventDepartment, ReportReply } from "@/lib/event-db";
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -26,29 +27,32 @@ type Props = {
   replies: ReportReply[];
   canReply: boolean;
   memberDeptIds: string[];
+  members: MentionMember[];
 };
 
 // ─── NoteCard ─────────────────────────────────────────────────────────────────
 
 function NoteCard({
-  note, dept, noteNum, canEdit, onSave, onDelete,
+  note, dept, noteNum, canEdit, members, onSave, onDelete,
 }: {
   note: EventReportNote;
   dept: string | undefined;
   noteNum: number;
   canEdit: boolean;
-  onSave: (content: string) => Promise<void>;
+  members: MentionMember[];
+  onSave: (content: string, mentions: MentionMember[]) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.content);
+  const [draftMentions, setDraftMentions] = useState<MentionMember[]>(note.mentions);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   async function save() {
     if (!draft.trim()) return;
     setSaving(true);
-    try { await onSave(draft.trim()); setEditing(false); }
+    try { await onSave(draft.trim(), draftMentions); setEditing(false); }
     finally { setSaving(false); }
   }
 
@@ -70,7 +74,7 @@ function NoteCard({
         </div>
         {canEdit && (
           <div className="flex gap-2 shrink-0">
-            <button onClick={() => { setEditing(!editing); setDraft(note.content); }}
+            <button onClick={() => { setEditing(!editing); setDraft(note.content); setDraftMentions(note.mentions); }}
               className="text-[11px] text-zinc-400 hover:text-zinc-600">
               {editing ? "取消" : "编辑"}
             </button>
@@ -81,8 +85,16 @@ function NoteCard({
       </div>
       {editing ? (
         <div className="flex flex-col gap-2">
-          <textarea value={draft} onChange={e => setDraft(e.target.value)} rows={2}
-            className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
+          <MentionTextarea
+            value={draft}
+            onChange={setDraft}
+            mentions={draftMentions}
+            onMentionsChange={setDraftMentions}
+            members={members}
+            rows={3}
+            placeholder="写 note… 输入 @ 可提及成员"
+            className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none"
+          />
           <button onClick={save} disabled={saving || !draft.trim()}
             className="self-start px-3 py-1 rounded-lg bg-zinc-800 text-white text-xs font-medium disabled:opacity-50">
             {saving ? "保存中…" : "保存"}
@@ -96,9 +108,6 @@ function NoteCard({
 }
 
 // ─── ReplyThread ──────────────────────────────────────────────────────────────
-// Flat unlimited-depth thread. All replies (including nested) are shown
-// chronologically. Any reply can be replied to; new replies always display
-// in the same flat list with an @mention for context.
 
 function collectThread(
   parentType: "report" | "note" | "reply",
@@ -133,7 +142,6 @@ function ReplyThread({
 
   const thread = collectThread(parentType, parentId, allReplies);
 
-  // Build a lookup of id → authorName for @mentions
   const authorMap = new Map<string, string>();
   for (const r of allReplies) authorMap.set(r.id, r.authorName);
 
@@ -264,11 +272,13 @@ export default function ReportViewClient({
   canWriteNote, canModerateNotes,
   currentUserOpenId, isPublished,
   replies: initialReplies, canReply, memberDeptIds,
+  members,
 }: Props) {
   const [notes, setNotes] = useState(initialNotes);
   const [replies, setReplies] = useState(initialReplies);
   const [newDeptId, setNewDeptId] = useState(departments[0]?.id ?? "");
   const [newContent, setNewContent] = useState("");
+  const [newMentions, setNewMentions] = useState<MentionMember[]>([]);
   const [adding, setAdding] = useState(false);
 
   const deptMap = new Map(departments.map(d => [d.id, d.name]));
@@ -282,18 +292,18 @@ export default function ReportViewClient({
       const res = await fetch(noteBase, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ departmentId: newDeptId, content: newContent.trim() }),
+        body: JSON.stringify({ departmentId: newDeptId, content: newContent.trim(), mentions: newMentions }),
       });
       const data = await res.json();
-      if (data.note) { setNotes(prev => [...prev, data.note]); setNewContent(""); }
+      if (data.note) { setNotes(prev => [...prev, data.note]); setNewContent(""); setNewMentions([]); }
     } finally { setAdding(false); }
   }
 
-  async function saveNote(noteId: string, content: string) {
+  async function saveNote(noteId: string, content: string, mentions: MentionMember[]) {
     const res = await fetch(`${noteBase}/${noteId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, mentions }),
     });
     const data = await res.json();
     if (data.note) setNotes(prev => prev.map(n => n.id === noteId ? data.note : n));
@@ -315,7 +325,6 @@ export default function ReportViewClient({
     }
   }
 
-  // Can reply to a specific note: canReply AND in that department (production-wide)
   function canReplyToNote(note: EventReportNote) {
     return canReply && memberDeptIds.includes(note.departmentId);
   }
@@ -380,8 +389,9 @@ export default function ReportViewClient({
                   <div key={note.id}>
                     <NoteCard
                       note={note} dept={undefined} noteNum={i + 1}
+                      members={members}
                       canEdit={!isPublished && (canModerateNotes || note.authorOpenId === currentUserOpenId)}
-                      onSave={content => saveNote(note.id, content)}
+                      onSave={(content, mentions) => saveNote(note.id, content, mentions)}
                       onDelete={() => deleteNote(note.id)}
                     />
                     <ReplyThread
@@ -399,8 +409,9 @@ export default function ReportViewClient({
             <div key={note.id} className="mb-3">
               <NoteCard
                 note={note} dept={deptMap.get(note.departmentId)} noteNum={i + 1}
+                members={members}
                 canEdit={!isPublished && (canModerateNotes || note.authorOpenId === currentUserOpenId)}
-                onSave={content => saveNote(note.id, content)}
+                onSave={(content, mentions) => saveNote(note.id, content, mentions)}
                 onDelete={() => deleteNote(note.id)}
               />
               <ReplyThread
@@ -418,9 +429,16 @@ export default function ReportViewClient({
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400">
                 {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
-              <textarea value={newContent} onChange={e => setNewContent(e.target.value)} rows={3}
-                placeholder="写 note…"
-                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
+              <MentionTextarea
+                value={newContent}
+                onChange={setNewContent}
+                mentions={newMentions}
+                onMentionsChange={setNewMentions}
+                members={members}
+                rows={3}
+                placeholder="写 note… 输入 @ 可提及成员"
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none w-full"
+              />
               <button onClick={addNote} disabled={adding || !newContent.trim()}
                 className="self-start px-4 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium hover:bg-zinc-700 disabled:opacity-50">
                 {adding ? "添加中…" : "添加"}

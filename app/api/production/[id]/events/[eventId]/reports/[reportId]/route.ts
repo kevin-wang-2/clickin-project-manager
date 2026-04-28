@@ -4,7 +4,8 @@ import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, getEventReport, updateEventReport, deleteEventReport } from "@/lib/event-db";
 import { loadEventPermContext, canWriteReport } from "@/lib/event-permissions";
-import { dispatchReportNotification } from "@/lib/notify";
+import { dispatchReportNotification, dispatchMentionNotifications } from "@/lib/notify";
+import type { Mention } from "@/lib/event-db";
 
 type Ctx = { params: Promise<{ id: string; eventId: string; reportId: string }> };
 
@@ -24,7 +25,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     return Response.json({ error: "权限不足" }, { status: 403 });
 
   const body = (await req.json()) as {
-    reportType?: string; title?: string; body?: string; publishedAt?: string | null;
+    reportType?: string; title?: string; body?: string;
+    publishedAt?: string | null; mentions?: Mention[];
   };
 
   const updated = await updateEventReport(reportId, eventId, {
@@ -32,12 +34,16 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
     title: body.title?.trim(),
     body: body.body,
     publishedAt: body.publishedAt,
+    mentions: body.mentions,
   });
 
-  // Dispatch report notification when newly published (existing had no publishedAt, new does)
+  // On publish: broadcast to all followers + send mention notifications
   if (body.publishedAt && !existing.publishedAt && updated) {
     dispatchReportNotification(reportId, eventId, productionId).catch(e =>
       console.error("[notify] dispatchReportNotification failed:", e),
+    );
+    dispatchMentionNotifications(reportId, eventId, productionId).catch(e =>
+      console.error("[notify] dispatchMentionNotifications failed:", e),
     );
   }
 

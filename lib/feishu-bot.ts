@@ -198,6 +198,18 @@ export function buildReportCard(
   return makeCard(`新报告 — ${reportTitle}`, "green", lines.join("\n"), url, "查看报告");
 }
 
+// ─── Mention notification ─────────────────────────────────────────────────────
+
+/** Sent to users @mentioned in a report body or note, at publish time. */
+export function buildMentionCard(
+  reportTitle: string,
+  eventTitle: string,
+  url: string,
+): object {
+  const body = `📌 **${eventTitle}** 的报告中提到了你\n\n**${reportTitle}**`;
+  return makeCard("报告提及", "blue", body, url, "查看报告");
+}
+
 // ─── Group chat messaging ─────────────────────────────────────────────────────
 
 /** Send an interactive card to a Feishu group chat (chat_id). */
