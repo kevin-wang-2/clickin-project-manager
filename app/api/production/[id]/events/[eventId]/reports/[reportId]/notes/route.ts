@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 // hasPermission is kept for the GET guard (event:follow)
-import { getProductionEvent, getEventReport, listReportNotes, createReportNote } from "@/lib/event-db";
+import { getProductionEvent, getEventReport, listReportNotes, createReportNote, type Mention } from "@/lib/event-db";
 import { loadEventPermContext, canWriteNote } from "@/lib/event-permissions";
 
 type Ctx = { params: Promise<{ id: string; eventId: string; reportId: string }> };
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return Response.json({ error: "权限不足" }, { status: 403 });
 
   const body = (await req.json()) as {
-    departmentId?: string; content?: string;
+    departmentId?: string; content?: string; mentions?: Mention[];
   };
   if (!body.departmentId || !body.content?.trim())
     return Response.json({ error: "departmentId 和 content 不能为空" }, { status: 400 });
@@ -56,6 +56,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     content: body.content.trim(),
     authorOpenId: session.openId,
     authorName: session.name,
+    mentions: body.mentions ?? [],
   });
   return Response.json({ note }, { status: 201 });
 }

@@ -45,6 +45,8 @@ const TECH_STATUS_COLORS: Record<string, string> = {
 };
 
 import { isoToDatetimeLocal, isoToDateInput, isoToTimeInput, datetimeLocalToIso, dateTimeToIso, fmtDateTime as fmt, fmtTime, fmtDateLong } from "@/lib/tz";
+import MarkdownEditor from "@/components/MarkdownEditor";
+import MentionTextarea, { type MentionMember } from "@/components/MentionTextarea";
 
 function toLocalInput(iso: string | null)     { return isoToDatetimeLocal(iso); }
 function toLocalDate(iso: string | null)       { return isoToDateInput(iso); }
@@ -2164,11 +2166,12 @@ function AssigneeEditor({
 // ─── ReportsTab ───────────────────────────────────────────────────────────────
 
 function ReportsTab({
-  eventId, productionId, reports, departments, canWrite,
+  eventId, productionId, reports, departments, members, canWrite,
   currentUserOpenId, onReportsChange,
 }: {
   eventId: string; productionId: string;
   reports: EventReport[]; departments: EventDepartment[];
+  members: MentionMember[];
   canWrite: boolean;
   currentUserOpenId: string;
   onReportsChange: (rs: EventReport[]) => void;
@@ -2233,6 +2236,7 @@ function ReportsTab({
             <ReportEditor
               report={report} departments={departments}
               eventId={eventId} productionId={productionId}
+              members={members}
               canWrite={canWrite}
               currentUserOpenId={currentUserOpenId}
               onUpdated={updated => onReportsChange(reports.map(r => r.id === updated.id ? updated : r))}
@@ -2274,16 +2278,19 @@ function ReportsTab({
 }
 
 function ReportEditor({
-  report, departments, eventId, productionId, canWrite,
+  report, departments, eventId, productionId, members, canWrite,
   currentUserOpenId,
   onUpdated, onDelete,
 }: {
   report: EventReport; departments: EventDepartment[];
-  eventId: string; productionId: string; canWrite: boolean;
+  eventId: string; productionId: string;
+  members: MentionMember[];
+  canWrite: boolean;
   currentUserOpenId: string;
   onUpdated: (r: EventReport) => void; onDelete: () => void;
 }) {
   const [body, setBody] = useState(report.body);
+  const [mentions, setMentions] = useState(report.mentions);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -2295,7 +2302,7 @@ function ReportEditor({
     const res = await fetch(`${base}/${report.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body, mentions }),
     });
     const data = await res.json();
     setSaving(false);
@@ -2307,9 +2314,15 @@ function ReportEditor({
       {/* Body: editable only when canWrite and not yet published */}
       {canWrite && !isPublished ? (
         <div className="flex flex-col gap-2">
-          <label className="text-xs text-zinc-400">正文（Markdown）</label>
-          <textarea value={body} onChange={e => setBody(e.target.value)} rows={10}
-            className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono focus:outline-none focus:border-zinc-400 resize-none" />
+          <label className="text-xs text-zinc-400">正文</label>
+          <MarkdownEditor
+            content={body}
+            onChange={setBody}
+            onMentionsChange={setMentions}
+            members={members}
+            placeholder="写报告正文… 输入 @ 可提及成员"
+            minHeight={200}
+          />
           <div className="flex gap-2 flex-wrap items-center">
             <button onClick={saveBody} disabled={saving || body === report.body}
               className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium disabled:opacity-50">
@@ -2355,6 +2368,7 @@ function ReportEditor({
       <DeptNotesList
         reportId={report.id} eventId={eventId} productionId={productionId}
         departments={departments.filter(d => d.kind === "dept")}
+        members={members}
         currentUserOpenId={currentUserOpenId}
         isPublished={isPublished}
       />
@@ -2363,11 +2377,12 @@ function ReportEditor({
 }
 
 function DeptNotesList({
-  reportId, eventId, productionId, departments,
+  reportId, eventId, productionId, departments, members,
   currentUserOpenId, isPublished,
 }: {
   reportId: string; eventId: string; productionId: string;
   departments: EventDepartment[];
+  members: MentionMember[];
   currentUserOpenId: string;
   isPublished: boolean;
 }) {
@@ -2375,8 +2390,10 @@ function DeptNotesList({
   const [loaded, setLoaded] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [editMentions, setEditMentions] = useState<MentionMember[]>([]);
   const [newDeptId, setNewDeptId] = useState(departments[0]?.id ?? "");
   const [newContent, setNewContent] = useState("");
+  const [newMentions, setNewMentions] = useState<MentionMember[]>([]);
 
   const base = `${BASE_PATH}/api/production/${productionId}/events/${eventId}/reports/${reportId}/notes`;
 
@@ -2391,10 +2408,10 @@ function DeptNotesList({
     const res = await fetch(base, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ departmentId: newDeptId, content: newContent.trim() }),
+      body: JSON.stringify({ departmentId: newDeptId, content: newContent.trim(), mentions: newMentions }),
     });
     const data = await res.json();
-    if (data.note) { setNotes(prev => [...prev, data.note]); setNewContent(""); }
+    if (data.note) { setNotes(prev => [...prev, data.note]); setNewContent(""); setNewMentions([]); }
   }
 
   async function saveEdit(id: string) {
@@ -2402,7 +2419,7 @@ function DeptNotesList({
     const res = await fetch(`${base}/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: editDraft.trim() }),
+      body: JSON.stringify({ content: editDraft.trim(), mentions: editMentions }),
     });
     const data = await res.json();
     if (data.note) { setNotes(prev => prev.map(n => n.id === id ? data.note : n)); setEditingId(null); }
@@ -2438,8 +2455,11 @@ function DeptNotesList({
               {!isPublished && (
                 <div className="flex gap-2 shrink-0">
                   {isOwn && (
-                    <button onClick={() => { setEditingId(editingId === note.id ? null : note.id); setEditDraft(note.content); }}
-                      className="text-[11px] text-zinc-400 hover:text-zinc-600">
+                    <button onClick={() => {
+                      setEditingId(editingId === note.id ? null : note.id);
+                      setEditDraft(note.content);
+                      setEditMentions(note.mentions ?? []);
+                    }} className="text-[11px] text-zinc-400 hover:text-zinc-600">
                       {editingId === note.id ? "取消" : "编辑"}
                     </button>
                   )}
@@ -2448,11 +2468,19 @@ function DeptNotesList({
               )}
             </div>
             {editingId === note.id ? (
-              <div className="flex gap-2">
-                <input value={editDraft} onChange={e => setEditDraft(e.target.value)}
-                  className="flex-1 rounded-lg border border-zinc-200 px-2 py-1 text-sm focus:outline-none" />
+              <div className="flex flex-col gap-1.5">
+                <MentionTextarea
+                  value={editDraft}
+                  onChange={setEditDraft}
+                  mentions={editMentions}
+                  onMentionsChange={setEditMentions}
+                  members={members}
+                  rows={2}
+                  placeholder="写 note…"
+                  className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm focus:outline-none resize-none"
+                />
                 <button onClick={() => saveEdit(note.id)}
-                  className="px-2 py-1 text-xs rounded-lg bg-zinc-800 text-white">保存</button>
+                  className="self-start px-2 py-1 text-xs rounded-lg bg-zinc-800 text-white">保存</button>
               </div>
             ) : (
               <p className="text-sm text-zinc-700">{note.content}</p>
@@ -2461,16 +2489,26 @@ function DeptNotesList({
         );
       })}
       {!isPublished && departments.length > 0 && (
-        <div className="flex gap-2 mt-1">
-          <select value={newDeptId} onChange={e => setNewDeptId(e.target.value)}
-            className="rounded-lg border border-zinc-200 px-2 py-1.5 text-xs focus:outline-none shrink-0">
-            {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-          <input value={newContent} onChange={e => setNewContent(e.target.value)}
-            placeholder="添加 note…" onKeyDown={e => e.key === "Enter" && addNote()}
-            className="flex-1 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-400" />
-          <button onClick={addNote}
-            className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-xs font-medium">添加</button>
+        <div className="flex flex-col gap-1.5 mt-1">
+          <div className="flex gap-2">
+            <select value={newDeptId} onChange={e => setNewDeptId(e.target.value)}
+              className="rounded-lg border border-zinc-200 px-2 py-1.5 text-xs focus:outline-none shrink-0">
+              {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+            <button onClick={addNote}
+              className="ml-auto px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-xs font-medium shrink-0">添加</button>
+          </div>
+          <MentionTextarea
+            value={newContent}
+            onChange={setNewContent}
+            mentions={newMentions}
+            onMentionsChange={setNewMentions}
+            members={members}
+            rows={2}
+            placeholder="写 note… 输入 @ 可提及成员"
+            onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); } }}
+            className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-400 resize-none"
+          />
         </div>
       )}
     </div>
@@ -3034,7 +3072,9 @@ export default function EventDetailClient({
           {tab === "reports" && (
             <ReportsTab
               eventId={event.id} productionId={productionId}
-              reports={reports} departments={departments} canWrite={canWriteReport}
+              reports={reports} departments={departments}
+              members={members.map(m => ({ openId: m.openId, name: m.name }))}
+              canWrite={canWriteReport}
               currentUserOpenId={currentUserOpenId}
               onReportsChange={setReports}
             />

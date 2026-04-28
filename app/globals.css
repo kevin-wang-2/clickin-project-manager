@@ -33,6 +33,25 @@ body {
   pointer-events: none;
 }
 
+/* Tiptap / ProseMirror editor */
+.ProseMirror {
+  outline: none;
+  cursor: text;
+}
+.ProseMirror > *:first-child { margin-top: 0; }
+.ProseMirror > *:last-child  { margin-bottom: 0; }
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #d4d4d8;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+.ProseMirror .mention {
+  color: #3b82f6;
+  font-weight: 500;
+}
+
 /* Inline stage directions within dialogue blocks */
 .stage-inline {
   font-style: italic;

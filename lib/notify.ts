@@ -5,9 +5,10 @@
 import { getPool } from "./pg";
 import { BASE_PATH } from "./base-path";
 import {
-  sendCard, buildWeeklyCallCard, buildDailyCallCard, buildReportCard,
+  sendCard, buildWeeklyCallCard, buildDailyCallCard, buildReportCard, buildMentionCard,
   type WeeklyCallEntry, type DailyCallScheduleItem,
 } from "./feishu-bot";
+import { listAllReportMentionedOpenIds } from "./event-db";
 import { createCardToken } from "./card-token";
 
 /** Builds a Feishu H5 web-app deep link for in-app rendering. */
@@ -360,4 +361,42 @@ export async function dispatchReportNotification(
   }
 
   return { sent, errors, ...(dryRun ? { dryCards } : {}) };
+}
+
+// ─── Mention notifications ────────────────────────────────────────────────────
+
+/**
+ * Sent at report publish time. Collects all @mentions from the report body and
+ * all its notes, then sends a targeted card to each mentioned user.
+ * Distinct from the broadcast notification: a person can receive both.
+ */
+export async function dispatchMentionNotifications(
+  reportId: string,
+  eventId: string,
+  productionId: string,
+): Promise<void> {
+  const mentionedOpenIds = await listAllReportMentionedOpenIds(reportId);
+  if (!mentionedOpenIds.length) return;
+
+  const pool = getPool();
+  const [rptRes, evRes] = await Promise.all([
+    pool.query<{ title: string }>("SELECT title FROM event_report WHERE id = $1", [reportId]),
+    pool.query<{ title: string }>("SELECT title FROM production_event WHERE id = $1", [eventId]),
+  ]);
+  const reportTitle = rptRes.rows[0]?.title ?? "报告";
+  const eventTitle = evRes.rows[0]?.title ?? "";
+
+  const reportBasePath = `${BASE_PATH}/production/${productionId}/events/${eventId}/reports/${reportId}`;
+  const tokenExp = new Date(Date.now() + 30 * 24 * 3_600_000);
+
+  for (const openId of mentionedOpenIds) {
+    try {
+      const token = createCardToken(openId, `report:${reportId}`, tokenExp);
+      const url = feishuCardUrl(`${reportBasePath}/${token}`);
+      const card = buildMentionCard(reportTitle, eventTitle, url);
+      await sendCard(openId, card);
+    } catch (e) {
+      console.error("[notify] mention notification error for", openId, e);
+    }
+  }
 }

@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
 import { verifyCardToken } from "@/lib/card-token";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, listProductionMembers } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import {
   getProductionEvent,
@@ -53,10 +53,11 @@ export default async function ReportViewPage({ params, searchParams }: Ctx) {
     const report = await getEventReport(reportId, eventId);
     if (!report || !report.publishedAt) redirect("/login");
 
-    const [notes, departments, replies] = await Promise.all([
+    const [notes, departments, replies, allMembers] = await Promise.all([
       listReportNotes(reportId),
       listEventDepartments(productionId),
       listReportReplies(reportId),
+      listProductionMembers(productionId),
     ]);
 
     await markReportRead(reportId, tokenData.openId);
@@ -76,6 +77,7 @@ export default async function ReportViewPage({ params, searchParams }: Ctx) {
         replies={replies}
         canReply={false}
         memberDeptIds={[]}
+        members={allMembers.map(m => ({ openId: m.openId, name: m.name }))}
       />
     );
   }
@@ -102,10 +104,11 @@ export default async function ReportViewPage({ params, searchParams }: Ctx) {
 
   const permCtx = await loadEventPermContext(session.openId, eventId);
 
-  const [notes, departments, replies] = await Promise.all([
+  const [notes, departments, replies, allMembers] = await Promise.all([
     listReportNotes(reportId),
     listEventDepartments(productionId),
     listReportReplies(reportId),
+    listProductionMembers(productionId),
   ]);
 
   if (report.publishedAt) {
@@ -131,6 +134,7 @@ export default async function ReportViewPage({ params, searchParams }: Ctx) {
       replies={replies}
       canReply={userCanReply}
       memberDeptIds={permCtx.memberDeptIds}
+      members={allMembers.map(m => ({ openId: m.openId, name: m.name }))}
     />
   );
 }

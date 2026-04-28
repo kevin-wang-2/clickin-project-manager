@@ -1,7 +1,9 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect } from "react";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { Markdown as MarkdownExt } from "tiptap-markdown";
 
 type Props = {
   content: string;
@@ -9,9 +11,24 @@ type Props = {
 };
 
 export default function Markdown({ content, size = "base" }: Props) {
-  return (
-    <div className={`prose prose-zinc max-w-none ${size === "sm" ? "prose-sm" : ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-    </div>
-  );
+  const editor = useEditor({
+    immediatelyRender: false,
+    editable: false,
+    extensions: [
+      StarterKit,
+      MarkdownExt.configure({ transformCopiedText: true }),
+    ],
+    content,
+    editorProps: {
+      attributes: {
+        class: `prose prose-zinc max-w-none${size === "sm" ? " prose-sm" : ""}`,
+      },
+    },
+  });
+
+  useEffect(() => {
+    editor?.commands.setContent(content);
+  }, [editor, content]);
+
+  return <EditorContent editor={editor} />;
 }

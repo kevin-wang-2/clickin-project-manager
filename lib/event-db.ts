@@ -89,6 +89,8 @@ export type EventTechReq = {
   createdAt: string;
 };
 
+export type Mention = { openId: string; name: string };
+
 export type EventReport = {
   id: string;
   eventId: string;
@@ -99,6 +101,7 @@ export type EventReport = {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
+  mentions: Mention[];
 };
 
 export type EventReportNote = {
@@ -110,6 +113,7 @@ export type EventReportNote = {
   authorName: string;
   createdAt: string;
   updatedAt: string;
+  mentions: Mention[];
 };
 
 export type UnreadReportEntry = {
@@ -165,13 +169,13 @@ type TechAssigneeRow = { req_id: string; open_id: string; name: string };
 type ReportRow = {
   id: string; event_id: string; report_type: string; title: string;
   body: string; created_by: string; created_at: Date; updated_at: Date;
-  published_at: Date | null;
+  published_at: Date | null; mentions: Mention[];
 };
 
 type ReportNoteRow = {
   id: string; report_id: string; department_id: string; content: string;
   author_open_id: string; author_name: string;
-  created_at: Date; updated_at: Date;
+  created_at: Date; updated_at: Date; mentions: Mention[];
 };
 
 // ─── Row converters ───────────────────────────────────────────────────────────
@@ -242,6 +246,7 @@ function rowToReport(r: ReportRow): EventReport {
     title: r.title, body: r.body, createdBy: r.created_by,
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
     publishedAt: r.published_at?.toISOString() ?? null,
+    mentions: r.mentions ?? [],
   };
 }
 
@@ -250,6 +255,7 @@ function rowToReportNote(r: ReportNoteRow): EventReportNote {
     id: r.id, reportId: r.report_id, departmentId: r.department_id,
     content: r.content, authorOpenId: r.author_open_id, authorName: r.author_name,
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
+    mentions: r.mentions ?? [],
   };
 }
 
@@ -1124,7 +1130,7 @@ export async function setTechReqAssignees(
 export async function listEventReports(eventId: string): Promise<EventReport[]> {
   const res = await getPool().query<ReportRow>(
     `SELECT id, event_id, report_type, title, body, created_by,
-            created_at, updated_at, published_at
+            created_at, updated_at, published_at, mentions
      FROM event_report WHERE event_id = $1 ORDER BY created_at`,
     [eventId]
   );
@@ -1134,7 +1140,7 @@ export async function listEventReports(eventId: string): Promise<EventReport[]> 
 export async function getEventReport(id: string, eventId: string): Promise<EventReport | null> {
   const res = await getPool().query<ReportRow>(
     `SELECT id, event_id, report_type, title, body, created_by,
-            created_at, updated_at, published_at
+            created_at, updated_at, published_at, mentions
      FROM event_report WHERE id = $1 AND event_id = $2`,
     [id, eventId]
   );
@@ -1159,7 +1165,7 @@ export async function updateEventReport(
   id: string, eventId: string,
   fields: {
     reportType?: string; title?: string; body?: string;
-    publishedAt?: string | null;
+    publishedAt?: string | null; mentions?: Mention[];
   }
 ): Promise<EventReport | null> {
   const sets: string[] = [];
@@ -1168,12 +1174,13 @@ export async function updateEventReport(
   if (fields.title       !== undefined) sets.push(`title        = $${vals.push(fields.title)}`);
   if (fields.body        !== undefined) sets.push(`body         = $${vals.push(fields.body)}`);
   if (fields.publishedAt !== undefined) sets.push(`published_at = $${vals.push(fields.publishedAt)}`);
+  if (fields.mentions    !== undefined) sets.push(`mentions     = $${vals.push(JSON.stringify(fields.mentions))}`);
   if (!sets.length) return getEventReport(id, eventId);
   sets.push(`updated_at = now()`);
   const res = await getPool().query<ReportRow>(
     `UPDATE event_report SET ${sets.join(", ")} WHERE id = $1 AND event_id = $2
      RETURNING id, event_id, report_type, title, body, created_by,
-               created_at, updated_at, published_at`,
+               created_at, updated_at, published_at, mentions`,
     vals
   );
   return res.rows[0] ? rowToReport(res.rows[0]) : null;
@@ -1191,7 +1198,7 @@ export async function deleteEventReport(id: string, eventId: string): Promise<vo
 export async function listReportNotes(reportId: string): Promise<EventReportNote[]> {
   const res = await getPool().query<ReportNoteRow>(
     `SELECT id, report_id, department_id, content, author_open_id, author_name,
-            created_at, updated_at
+            created_at, updated_at, mentions
      FROM event_report_note WHERE report_id = $1 ORDER BY created_at`,
     [reportId]
   );
@@ -1201,27 +1208,34 @@ export async function listReportNotes(reportId: string): Promise<EventReportNote
 export async function createReportNote(data: {
   id: string; reportId: string; departmentId: string;
   content: string; authorOpenId: string; authorName: string;
+  mentions?: Mention[];
 }): Promise<EventReportNote> {
   const res = await getPool().query<ReportNoteRow>(
     `INSERT INTO event_report_note
-       (id, report_id, department_id, content, author_open_id, author_name)
-     VALUES ($1,$2,$3,$4,$5,$6)
+       (id, report_id, department_id, content, author_open_id, author_name, mentions)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
      RETURNING id, report_id, department_id, content, author_open_id, author_name,
-               created_at, updated_at`,
-    [data.id, data.reportId, data.departmentId, data.content, data.authorOpenId, data.authorName]
+               created_at, updated_at, mentions`,
+    [data.id, data.reportId, data.departmentId, data.content, data.authorOpenId, data.authorName,
+     JSON.stringify(data.mentions ?? [])]
   );
   return rowToReportNote(res.rows[0]);
 }
 
 export async function updateReportNote(
-  id: string, reportId: string, content: string
+  id: string, reportId: string, content: string, mentions?: Mention[]
 ): Promise<EventReportNote | null> {
+  const sets = ["content = $1", "updated_at = now()"];
+  const vals: unknown[] = [content, id, reportId];
+  if (mentions !== undefined) {
+    sets.push(`mentions = $${vals.push(JSON.stringify(mentions))}`);
+  }
   const res = await getPool().query<ReportNoteRow>(
-    `UPDATE event_report_note SET content = $1, updated_at = now()
+    `UPDATE event_report_note SET ${sets.join(", ")}
      WHERE id = $2 AND report_id = $3
      RETURNING id, report_id, department_id, content, author_open_id, author_name,
-               created_at, updated_at`,
-    [content, id, reportId]
+               created_at, updated_at, mentions`,
+    vals
   );
   return res.rows[0] ? rowToReportNote(res.rows[0]) : null;
 }
@@ -1244,11 +1258,31 @@ export async function deleteReportNote(
 export async function getReportNote(id: string, reportId: string): Promise<EventReportNote | null> {
   const res = await getPool().query<ReportNoteRow>(
     `SELECT id, report_id, department_id, content, author_open_id, author_name,
-            created_at, updated_at
+            created_at, updated_at, mentions
      FROM event_report_note WHERE id = $1 AND report_id = $2`,
     [id, reportId]
   );
   return res.rows[0] ? rowToReportNote(res.rows[0]) : null;
+}
+
+/** Collect all unique openIds mentioned across a report's body and all its notes. */
+export async function listAllReportMentionedOpenIds(reportId: string): Promise<string[]> {
+  const pool = getPool();
+  const [rptRes, noteRes] = await Promise.all([
+    pool.query<{ open_id: string }>(
+      `SELECT jsonb_array_elements(mentions)->>'openId' AS open_id FROM event_report WHERE id = $1`,
+      [reportId],
+    ),
+    pool.query<{ open_id: string }>(
+      `SELECT jsonb_array_elements(mentions)->>'openId' AS open_id FROM event_report_note WHERE report_id = $1`,
+      [reportId],
+    ),
+  ]);
+  const ids = new Set<string>();
+  for (const { open_id } of [...rptRes.rows, ...noteRes.rows]) {
+    if (open_id) ids.add(open_id);
+  }
+  return [...ids];
 }
 
 // ─── Report read receipts ─────────────────────────────────────────────────────
