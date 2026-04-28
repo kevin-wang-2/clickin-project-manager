@@ -1,8 +1,8 @@
-import { redirect } from "next/navigation";
+import DailyCallPage from "../../page";
 
 type Ctx = { params: Promise<{ date: string; token: string }> };
 
-export default async function DailyCallTokenRedirect({ params }: Ctx) {
+export default async function DailyCallTokenPage({ params }: Ctx) {
   const { date, token } = await params;
-  redirect(`/my/daily-call?date=${date}&t=${token}`);
+  return DailyCallPage({ searchParams: Promise.resolve({ date, t: token }) });
 }
