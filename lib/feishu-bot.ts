@@ -1,4 +1,4 @@
-import { getAppAccessToken } from "./feishu-auth";
+import { getAppAccessToken, getTenantAccessToken } from "./feishu-auth";
 
 const BASE = "https://open.feishu.cn/open-apis";
 
@@ -196,4 +196,93 @@ export function buildReportCard(
   }
   lines.push("", `_发布于 ${fmtDate(publishedAt)} ${fmtTime(publishedAt)}_`);
   return makeCard(`新报告 — ${reportTitle}`, "green", lines.join("\n"), url, "查看报告");
+}
+
+// ─── Group chat messaging ─────────────────────────────────────────────────────
+
+/** Send an interactive card to a Feishu group chat (chat_id). */
+export async function sendChatCard(chatId: string, card: object): Promise<void> {
+  const token = await getTenantAccessToken();
+  const res = await fetch(`${BASE}/im/v1/messages?receive_id_type=chat_id`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      receive_id: chatId,
+      msg_type: "interactive",
+      content: JSON.stringify(card),
+    }),
+  });
+  const raw = await res.text();
+  let data: { code: number; msg: string };
+  try { data = JSON.parse(raw); } catch { throw new Error(`Feishu non-JSON (HTTP ${res.status}): ${raw.slice(0, 200)}`); }
+  if (data.code !== 0) console.error(`[feishu-bot] sendChatCard(${chatId}) failed: ${data.code} ${data.msg}`);
+}
+
+// ─── Awaiting-req notification ────────────────────────────────────────────────
+
+/**
+ * Build a card notifying POCs that a new "待确认" req needs attention.
+ */
+export function buildAwaitingReqCard(
+  reqTitle: string,
+  eventTitle: string,
+  deptName: string,
+  pocOpenIds: string[],
+  url: string,
+): object {
+  const mentions = pocOpenIds.map(id => `<at id=${id}></at>`).join(" ");
+  const body = [
+    `**事件：** ${eventTitle}　**部门：** ${deptName}`,
+    `**需求：** ${reqTitle}`,
+    "",
+    `${mentions} 请填写需求详情并安排人力。`,
+  ].join("\n");
+
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "📋 新需求待确认" }, template: "yellow" },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: body } },
+      { tag: "hr" },
+      {
+        tag: "action",
+        actions: [{ tag: "button", text: { tag: "plain_text", content: "查看需求详情" }, url, type: "primary" }],
+      },
+    ],
+  };
+}
+
+/**
+ * Build an urge card for multiple unconfirmed reqs in a department.
+ * More assertive tone — used when the operator manually pushes for confirmation.
+ */
+export function buildUrgeReqCard(
+  eventTitle: string,
+  deptName: string,
+  reqTitles: string[],
+  pocOpenIds: string[],
+  url: string,
+): object {
+  const mentions = pocOpenIds.map(id => `<at id=${id}></at>`).join(" ");
+  const reqList = reqTitles.map(t => `· ${t || "（未命名需求）"}`).join("\n");
+  const body = [
+    `${mentions}`,
+    "",
+    `**${eventTitle}** 有 **${reqTitles.length}** 个需求尚未确认，请立即填写详情并安排人力：`,
+    "",
+    reqList,
+  ].join("\n");
+
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: `⚠️ 需求确认催办 · ${deptName}` }, template: "red" },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: body } },
+      { tag: "hr" },
+      {
+        tag: "action",
+        actions: [{ tag: "button", text: { tag: "plain_text", content: "立即处理需求" }, url, type: "danger" }],
+      },
+    ],
+  };
 }

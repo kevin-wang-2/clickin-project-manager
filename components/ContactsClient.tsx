@@ -329,6 +329,19 @@ function DepartmentPanel({
     }
   };
 
+  const handleCreateDeptChat = async (dept: EventDepartment) => {
+    if (!confirm(`确定为「${dept.name}」创建飞书群吗？`)) return;
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/departments/${dept.id}/chat`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (data.chatId) {
+      setDepartments(prev => prev.map(d => d.id === dept.id ? { ...d, chatId: data.chatId } : d));
+    } else {
+      alert(data.error ?? "建群失败");
+    }
+  };
+
   const handleSaveName = async (id: string) => {
     if (!editName.trim() || saving) return;
     setSaving(true);
@@ -457,6 +470,19 @@ function DepartmentPanel({
               >
                 改名
               </button>
+              {dept.chatId ? (
+                <span className="shrink-0 text-[10px] bg-blue-50 text-blue-500 rounded px-1.5 py-0.5">
+                  飞书群
+                </span>
+              ) : dept.kind === "dept" && (
+                <button
+                  onClick={() => handleCreateDeptChat(dept)}
+                  className="shrink-0 text-[11px] text-zinc-300 hover:text-blue-500 px-1 transition-colors"
+                  title="创建飞书群"
+                >
+                  建群
+                </button>
+              )}
               <button
                 onClick={() => handleDelete(dept.id)}
                 className="shrink-0 text-[11px] text-zinc-300 hover:text-red-400 px-1 transition-colors"

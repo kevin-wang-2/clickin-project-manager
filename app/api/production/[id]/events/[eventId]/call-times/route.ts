@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, listEventCallTimes, createEventCallTime } from "@/lib/event-db";
+import { addChatMembers } from "@/lib/feishu-chat";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
 
@@ -52,5 +53,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     scheduleItemId: body.scheduleItemId ?? null,
     notes: body.notes ?? "",
   });
+
+  if (event.chatId) {
+    addChatMembers(event.chatId, [body.openId]).catch(console.error);
+  }
+
   return Response.json({ callTime }, { status: 201 });
 }

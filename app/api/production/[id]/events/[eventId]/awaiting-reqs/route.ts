@@ -2,7 +2,10 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import { getProductionEvent, upsertAwaitingTechReqs } from "@/lib/event-db";
+import { getProductionEvent, upsertAwaitingTechReqs, getEventDepartment } from "@/lib/event-db";
+import { sendChatCard, buildAwaitingReqCard } from "@/lib/feishu-bot";
+import { BASE_PATH } from "@/lib/base-path";
+import { getPool } from "@/lib/pg";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
 
@@ -22,6 +25,26 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const departmentIds = body.departmentIds ?? [];
   if (!departmentIds.length) return Response.json({ techReqs: [] });
 
+  // Snapshot which depts already have an awaiting req before the upsert
+  const existingRes = await getPool().query<{ department_id: string }>(
+    `SELECT department_id FROM event_tech_req WHERE event_id = $1 AND department_id = ANY($2) AND status = 'awaiting'`,
+    [eventId, departmentIds],
+  );
+  const alreadyExisting = new Set(existingRes.rows.map(r => r.department_id));
+
   const techReqs = await upsertAwaitingTechReqs(eventId, departmentIds, body.scheduleItemId);
+
+  // Send notification for newly created reqs only
+  const appId = process.env.FEISHU_APP_ID ?? "";
+  for (const req of techReqs) {
+    if (!req.departmentId || alreadyExisting.has(req.departmentId)) continue;
+    const dept = await getEventDepartment(req.departmentId, productionId);
+    if (!dept?.chatId || !dept.pocOpenIds.length) continue;
+    const reqPath = `${BASE_PATH}/production/${productionId}/events/${eventId}/reqs/${req.id}`;
+    const url = `https://applink.feishu.cn/client/web_app/open?appId=${appId}&path=${encodeURIComponent(reqPath)}`;
+    const card = buildAwaitingReqCard(req.title || dept.name, event.title, dept.name, dept.pocOpenIds, url);
+    sendChatCard(dept.chatId, card).catch(e => console.error("[awaiting-req] notify failed:", e));
+  }
+
   return Response.json({ techReqs });
 }

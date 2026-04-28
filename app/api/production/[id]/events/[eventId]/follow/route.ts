@@ -3,6 +3,7 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, selfFollowEvent, selfUnfollowEvent, getSelfParticipantRole } from "@/lib/event-db";
+import { addChatMembers } from "@/lib/feishu-chat";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
 
@@ -19,6 +20,11 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   await selfFollowEvent(eventId, session.openId, session.name);
   const role = await getSelfParticipantRole(eventId, session.openId);
+
+  if (event.chatId) {
+    addChatMembers(event.chatId, [session.openId]).catch(console.error);
+  }
+
   return Response.json({ role });
 }
 

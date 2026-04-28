@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { ProductionEvent, EventDepartment } from "@/lib/event-db";
-import { fmtDateTime, datetimeLocalToIso, dateTimeToIso } from "@/lib/tz";
+import { fmtDateTimeSmart, datetimeLocalToIso, dateTimeToIso } from "@/lib/tz";
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   rehearsal: "排练",
@@ -28,7 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function formatDateTime(iso: string | null): string {
-  return fmtDateTime(iso);
+  return fmtDateTimeSmart(iso);
 }
 
 function EventCard({

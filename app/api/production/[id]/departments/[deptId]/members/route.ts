@@ -1,8 +1,12 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, getBossOpenIds } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import { getEventDepartment, setDepartmentMembers } from "@/lib/event-db";
+import {
+  getEventDepartment, setDepartmentMembers,
+  getDepartmentCurrentEntries, getDeptReqsWithChat,
+} from "@/lib/event-db";
+import { addChatMembers, removeChatMember } from "@/lib/feishu-chat";
 
 type Ctx = { params: Promise<{ id: string; deptId: string }> };
 
@@ -44,8 +48,57 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
   }
 
   const members = (body.members as { openId: string; isMember: boolean; isPoc: boolean }[]);
+
+  // Snapshot before save — needed for diff-based Feishu sync
+  const [before, bossIds] = await Promise.all([
+    getDepartmentCurrentEntries(deptId),
+    getBossOpenIds(productionId),
+  ]);
+
   await setDepartmentMembers(deptId, members);
 
   const updated = await getEventDepartment(deptId, productionId);
+
+  // ── Feishu dept group sync ───────────────────────────────────────────────────
+  if (updated?.chatId) {
+    const chatId = updated.chatId;
+    const bossSet = new Set(bossIds);
+
+    const beforeActive = new Set(
+      before.filter(m => m.isMember || m.isPoc).map(m => m.openId)
+    );
+    const afterActive = new Set(
+      members.filter(m => m.isMember || m.isPoc).map(m => m.openId)
+    );
+    const beforePocs = new Set(before.filter(m => m.isPoc).map(m => m.openId));
+    const afterPocs  = new Set(members.filter(m => m.isPoc).map(m => m.openId));
+
+    // Add newly added dept members to chat
+    const toAdd = [...afterActive].filter(id => !beforeActive.has(id));
+    if (toAdd.length) await addChatMembers(chatId, toAdd);
+
+    // Remove members who left dept AND are not bosses
+    const toRemove = [...beforeActive].filter(id => !afterActive.has(id) && !bossSet.has(id));
+    await Promise.all(toRemove.map(id => removeChatMember(chatId, id)));
+
+    // ── POC added → add to all req chats in this dept ───────────────────────
+    const newPocs = [...afterPocs].filter(id => !beforePocs.has(id));
+    if (newPocs.length) {
+      const reqsWithChat = await getDeptReqsWithChat(deptId);
+      await Promise.all(
+        reqsWithChat.map(r => addChatMembers(r.chatId, newPocs))
+      );
+    }
+  } else if (updated) {
+    // No dept chat — still handle POC→req chat sync
+    const beforePocs = new Set(before.filter(m => m.isPoc).map(m => m.openId));
+    const afterPocs  = new Set(members.filter(m => m.isPoc).map(m => m.openId));
+    const newPocs = [...afterPocs].filter(id => !beforePocs.has(id));
+    if (newPocs.length) {
+      const reqsWithChat = await getDeptReqsWithChat(deptId);
+      await Promise.all(reqsWithChat.map(r => addChatMembers(r.chatId, newPocs)));
+    }
+  }
+
   return Response.json({ department: updated });
 }

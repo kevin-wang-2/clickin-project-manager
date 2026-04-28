@@ -2,8 +2,10 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import { getProductionEvent, listEventTechReqs, createEventTechReq } from "@/lib/event-db";
+import { getProductionEvent, listEventTechReqs, createEventTechReq, getEventDepartment } from "@/lib/event-db";
 import { loadEventPermContext, canEditTechReq } from "@/lib/event-permissions";
+import { sendChatCard, buildAwaitingReqCard } from "@/lib/feishu-bot";
+import { BASE_PATH } from "@/lib/base-path";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
 
@@ -57,5 +59,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     departmentId: body.departmentId ?? null,
     assignees: body.assignees ?? [],
   });
+
+  // Notify dept group chat when a new awaiting req is created
+  if (techReq.status === "awaiting" && techReq.departmentId) {
+    const dept = await getEventDepartment(techReq.departmentId, productionId);
+    if (dept?.chatId && dept.pocOpenIds.length) {
+      const appId = process.env.FEISHU_APP_ID ?? "";
+      const reqPath = `${BASE_PATH}/production/${productionId}/events/${eventId}/reqs/${techReq.id}`;
+      const url = `https://applink.feishu.cn/client/web_app/open?appId=${appId}&path=${encodeURIComponent(reqPath)}`;
+      const card = buildAwaitingReqCard(techReq.title, event.title, dept.name, dept.pocOpenIds, url);
+      sendChatCard(dept.chatId, card).catch(e => console.error("[tech-req] notify failed:", e));
+    }
+  }
+
   return Response.json({ techReq }, { status: 201 });
 }

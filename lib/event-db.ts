@@ -11,6 +11,7 @@ export type EventDepartment = {
   displayOrder: number;
   memberOpenIds: string[];
   pocOpenIds: string[];
+  chatId: string | null;
   createdAt: string;
 };
 
@@ -25,6 +26,7 @@ export type ProductionEvent = {
   status: "draft" | "published" | "completed" | "cancelled";
   description: string;
   stageManagers: { openId: string; name: string }[];
+  chatId: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -82,6 +84,7 @@ export type EventTechReq = {
   departmentId: string | null;
   status: string;
   assignees: EventTechReqAssignee[];
+  chatId: string | null;
   createdAt: string;
 };
 
@@ -122,13 +125,13 @@ export type UnreadReportEntry = {
 
 type DeptRow = {
   id: string; production_id: string; name: string;
-  kind: string; display_order: number; created_at: Date;
+  kind: string; display_order: number; chat_id: string | null; created_at: Date;
 };
 
 type EventRow = {
   id: string; production_id: string; title: string; event_type: string;
   location: string; start_time: Date | null; end_time: Date | null;
-  status: string; description: string;
+  status: string; description: string; chat_id: string | null;
   created_by: string; created_at: Date; updated_at: Date;
 };
 
@@ -153,7 +156,7 @@ type CallTimeRow = {
 type TechReqRow = {
   id: string; event_id: string;
   title: string; description: string; preset_minutes: number | null;
-  department_id: string | null; status: string; created_at: Date;
+  department_id: string | null; status: string; chat_id: string | null; created_at: Date;
 };
 
 type TechAssigneeRow = { req_id: string; open_id: string; name: string };
@@ -176,7 +179,8 @@ function rowToDept(r: DeptRow, memberOpenIds: string[], pocOpenIds: string[]): E
   return {
     id: r.id, productionId: r.production_id, name: r.name,
     kind: r.kind as EventDepartment["kind"], displayOrder: r.display_order,
-    memberOpenIds, pocOpenIds, createdAt: r.created_at.toISOString(),
+    memberOpenIds, pocOpenIds, chatId: r.chat_id ?? null,
+    createdAt: r.created_at.toISOString(),
   };
 }
 
@@ -189,6 +193,7 @@ function rowToEvent(r: EventRow, stageManagers: { openId: string; name: string }
     status: r.status as ProductionEvent["status"],
     description: r.description,
     stageManagers,
+    chatId: r.chat_id ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
   };
@@ -225,7 +230,8 @@ function rowToTechReq(r: TechReqRow, assignees: EventTechReqAssignee[], schedule
     id: r.id, eventId: r.event_id, scheduleItemIds,
     title: r.title, description: r.description,
     presetMinutes: r.preset_minutes, departmentId: r.department_id,
-    status: r.status, assignees, createdAt: r.created_at.toISOString(),
+    status: r.status, assignees, chatId: r.chat_id ?? null,
+    createdAt: r.created_at.toISOString(),
   };
 }
 
@@ -254,7 +260,7 @@ export async function listEventDepartments(productionId: string): Promise<EventD
   const pool = getPool();
   const [deptRes, memberRes] = await Promise.all([
     pool.query<DeptRow>(
-      `SELECT id, production_id, name, kind, display_order, created_at
+      `SELECT id, production_id, name, kind, display_order, chat_id, created_at
        FROM event_department WHERE production_id = $1 ORDER BY display_order, name`,
       [productionId]
     ),
@@ -285,7 +291,7 @@ export async function getEventDepartment(id: string, productionId: string): Prom
   const pool = getPool();
   const [deptRes, memberRes] = await Promise.all([
     pool.query<DeptRow>(
-      `SELECT id, production_id, name, kind, display_order, created_at
+      `SELECT id, production_id, name, kind, display_order, chat_id, created_at
        FROM event_department WHERE id = $1 AND production_id = $2`,
       [id, productionId]
     ),
@@ -309,7 +315,7 @@ export async function createEventDepartment(data: {
   const res = await getPool().query<DeptRow>(
     `INSERT INTO event_department (id, production_id, name, kind, display_order)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, production_id, name, kind, display_order, created_at`,
+     RETURNING id, production_id, name, kind, display_order, chat_id, created_at`,
     [data.id, data.productionId, data.name, data.kind, data.displayOrder]
   );
   return rowToDept(res.rows[0], [], []);
@@ -405,7 +411,7 @@ export async function listProductionEvents(productionId: string): Promise<Produc
   const [eventsRes, smRes] = await Promise.all([
     pool.query<EventRow>(
       `SELECT id, production_id, title, event_type, location,
-              start_time, end_time, status, description,
+              start_time, end_time, status, description, chat_id,
               created_by, created_at, updated_at
        FROM production_event WHERE production_id = $1 ORDER BY start_time NULLS LAST, created_at`,
       [productionId]
@@ -431,7 +437,7 @@ export async function getProductionEvent(id: string, productionId: string): Prom
   const [eventsRes, smRes] = await Promise.all([
     pool.query<EventRow>(
       `SELECT id, production_id, title, event_type, location,
-              start_time, end_time, status, description,
+              start_time, end_time, status, description, chat_id,
               created_by, created_at, updated_at
        FROM production_event WHERE id = $1 AND production_id = $2`,
       [id, productionId]
@@ -480,7 +486,7 @@ export async function createProductionEvent(data: {
        (id, production_id, title, event_type, location, start_time, end_time, description, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING id, production_id, title, event_type, location,
-               start_time, end_time, status, description,
+               start_time, end_time, status, description, chat_id,
                created_by, created_at, updated_at`,
     [data.id, data.productionId, data.title, data.eventType, data.location,
      data.startTime, data.endTime, data.description, data.createdBy]
@@ -510,7 +516,7 @@ export async function updateProductionEvent(
   const res = await getPool().query<EventRow>(
     `UPDATE production_event SET ${sets.join(", ")} WHERE id = $1 AND production_id = $2
      RETURNING id, production_id, title, event_type, location,
-               start_time, end_time, status, description,
+               start_time, end_time, status, description, chat_id,
                created_by, created_at, updated_at`,
     vals
   );
@@ -815,7 +821,7 @@ export async function listEventTechReqs(eventId: string): Promise<EventTechReq[]
   const [reqRes, assigneeRes, itemRes] = await Promise.all([
     pool.query<TechReqRow>(
       `SELECT id, event_id, title, description,
-              preset_minutes, department_id, status, created_at
+              preset_minutes, department_id, status, chat_id, created_at
        FROM event_tech_req WHERE event_id = $1 ORDER BY created_at`,
       [eventId]
     ),
@@ -852,7 +858,7 @@ export async function getEventTechReq(id: string, eventId: string): Promise<Even
   const [reqRes, assigneeRes, itemRes] = await Promise.all([
     pool.query<TechReqRow>(
       `SELECT id, event_id, title, description,
-              preset_minutes, department_id, status, created_at
+              preset_minutes, department_id, status, chat_id, created_at
        FROM event_tech_req WHERE id = $1 AND event_id = $2`,
       [id, eventId]
     ),
@@ -907,7 +913,7 @@ export async function createEventTechReq(data: {
          (id, event_id, title, description, preset_minutes, department_id)
        VALUES ($1,$2,$3,$4,$5,$6)
        RETURNING id, event_id, title, description,
-                 preset_minutes, department_id, status, created_at`,
+                 preset_minutes, department_id, status, chat_id, created_at`,
       [data.id, data.eventId, data.title, data.description, data.presetMinutes, data.departmentId]
     );
     const unique = [...new Set(data.scheduleItemIds)];
@@ -951,7 +957,7 @@ export async function updateEventTechReq(
   const res = await getPool().query<TechReqRow>(
     `UPDATE event_tech_req SET ${sets.join(", ")} WHERE id = $1 AND event_id = $2
      RETURNING id, event_id, title, description,
-               preset_minutes, department_id, status, created_at`,
+               preset_minutes, department_id, status, chat_id, created_at`,
     vals
   );
   if (!res.rows[0]) return null;
@@ -1641,4 +1647,104 @@ export async function deleteReportReply(id: string, reportId: string): Promise<v
     "DELETE FROM event_report_reply WHERE id = $1 AND report_id = $2",
     [id, reportId]
   );
+}
+
+// ─── Group chat ID management ─────────────────────────────────────────────────
+
+export async function clearEventChatId(eventId: string): Promise<void> {
+  await getPool().query("UPDATE production_event SET chat_id = NULL WHERE id = $1", [eventId]);
+}
+
+export async function clearTechReqChatId(reqId: string): Promise<void> {
+  await getPool().query("UPDATE event_tech_req SET chat_id = NULL WHERE id = $1", [reqId]);
+}
+
+export async function setDepartmentChatId(deptId: string, chatId: string): Promise<void> {
+  await getPool().query(
+    "UPDATE event_department SET chat_id = $1 WHERE id = $2",
+    [chatId, deptId]
+  );
+}
+
+export async function setEventChatId(eventId: string, chatId: string): Promise<void> {
+  await getPool().query(
+    "UPDATE production_event SET chat_id = $1 WHERE id = $2",
+    [chatId, eventId]
+  );
+}
+
+export async function setTechReqChatId(reqId: string, chatId: string): Promise<void> {
+  await getPool().query(
+    "UPDATE event_tech_req SET chat_id = $1 WHERE id = $2",
+    [chatId, reqId]
+  );
+}
+
+/** Returns all dept chat_ids for a production (used to filter out dept groups when binding). */
+export async function getProductionDeptChatIds(productionId: string): Promise<Set<string>> {
+  const res = await getPool().query<{ chat_id: string }>(
+    "SELECT chat_id FROM event_department WHERE production_id = $1 AND chat_id IS NOT NULL",
+    [productionId]
+  );
+  return new Set(res.rows.map(r => r.chat_id));
+}
+
+/** Returns current dept member entries — used to compute diff for Feishu sync. */
+export async function getDepartmentCurrentEntries(
+  deptId: string
+): Promise<{ openId: string; isMember: boolean; isPoc: boolean }[]> {
+  const res = await getPool().query<{ open_id: string; is_member: boolean; is_poc: boolean }>(
+    "SELECT open_id, is_member, is_poc FROM event_department_member WHERE department_id = $1",
+    [deptId]
+  );
+  return res.rows.map(r => ({ openId: r.open_id, isMember: r.is_member, isPoc: r.is_poc }));
+}
+
+/** Returns all open IDs that should be in an event's group chat (participants + call-time people). */
+export async function getEventChatTargets(eventId: string): Promise<string[]> {
+  const [partRes, ctRes] = await Promise.all([
+    getPool().query<{ open_id: string }>(
+      "SELECT open_id FROM event_participant WHERE event_id = $1",
+      [eventId]
+    ),
+    getPool().query<{ open_id: string }>(
+      "SELECT DISTINCT open_id FROM event_call_time WHERE event_id = $1",
+      [eventId]
+    ),
+  ]);
+  const ids = new Set<string>();
+  for (const r of partRes.rows) ids.add(r.open_id);
+  for (const r of ctRes.rows) ids.add(r.open_id);
+  return [...ids];
+}
+
+/** Returns all open IDs that should be in a req's group chat (assignees + dept POCs). */
+export async function getReqChatTargets(reqId: string): Promise<string[]> {
+  const [assigneeRes, pocRes] = await Promise.all([
+    getPool().query<{ open_id: string }>(
+      "SELECT open_id FROM event_tech_assignee WHERE req_id = $1",
+      [reqId]
+    ),
+    getPool().query<{ open_id: string }>(
+      `SELECT edm.open_id FROM event_tech_req etr
+       JOIN event_department_member edm ON edm.department_id = etr.department_id AND edm.is_poc = true
+       WHERE etr.id = $1`,
+      [reqId]
+    ),
+  ]);
+  const ids = new Set<string>();
+  for (const r of assigneeRes.rows) ids.add(r.open_id);
+  for (const r of pocRes.rows) ids.add(r.open_id);
+  return [...ids];
+}
+
+/** Returns all tech reqs in a dept that have a chat_id (for POC-add sync). */
+export async function getDeptReqsWithChat(
+  deptId: string
+): Promise<{ id: string; chatId: string }[]> {
+  const res = await getPool().query<{ id: string; chat_id: string }>(
+    "SELECT id, chat_id FROM event_tech_req WHERE department_id = $1 AND chat_id IS NOT NULL",
+    [deptId]
+  );
+  return res.rows.map(r => ({ id: r.id, chatId: r.chat_id }));
 }
