@@ -53,6 +53,113 @@ type Props = {
   productionId: string;
 };
 
+function ReqChatSection({
+  req, event, productionId, canManage, onChatIdSet,
+}: {
+  req: EventTechReq;
+  event: ProductionEvent;
+  productionId: string;
+  canManage: boolean;
+  onChatIdSet: (chatId: string) => void;
+}) {
+  const [bindQuery, setBindQuery] = useState("");
+  const [bindResults, setBindResults] = useState<{ chatId: string; name: string }[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [showBind, setShowBind] = useState(false);
+
+  const base = `${BASE_PATH}/api/production/${productionId}/events/${event.id}/tech-reqs/${req.id}/chat`;
+
+  async function createChat() {
+    if (!confirm("确定为此需求创建飞书群吗？")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(base, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create" }),
+      });
+      const data = await res.json();
+      if (data.chatId) onChatIdSet(data.chatId);
+      else alert(data.error ?? "建群失败");
+    } finally { setBusy(false); }
+  }
+
+  async function searchBindable() {
+    if (!bindQuery.trim()) return;
+    setSearching(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/chats/bindable?q=${encodeURIComponent(bindQuery)}`);
+      const data = await res.json();
+      setBindResults(data.chats ?? []);
+    } finally { setSearching(false); }
+  }
+
+  async function bindChat(chatId: string) {
+    setBusy(true);
+    try {
+      const res = await fetch(base, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bind", chatId }),
+      });
+      const data = await res.json();
+      if (data.chatId) { onChatIdSet(data.chatId); setShowBind(false); }
+      else alert(data.error ?? "绑定失败");
+    } finally { setBusy(false); }
+  }
+
+  if (req.chatId) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-zinc-400">飞书群</span>
+        <span className="text-xs bg-blue-50 text-blue-600 rounded-lg px-2 py-1 font-medium">已绑定</span>
+      </div>
+    );
+  }
+
+  if (!canManage) return null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={createChat} disabled={busy}
+          className="px-3 py-1.5 rounded-lg border border-blue-200 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50">
+          {busy ? "…" : "创建飞书群"}
+        </button>
+        <button onClick={() => setShowBind(b => !b)} disabled={busy}
+          className="px-3 py-1.5 rounded-lg border border-zinc-200 text-sm text-zinc-600 hover:bg-zinc-50">
+          绑定现有群
+        </button>
+      </div>
+      {showBind && (
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input value={bindQuery} onChange={e => setBindQuery(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && searchBindable()}
+              placeholder="搜索群名…"
+              className="flex-1 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-400" />
+            <button onClick={searchBindable} disabled={searching}
+              className="px-3 py-1.5 rounded-lg bg-zinc-100 text-sm text-zinc-600 hover:bg-zinc-200 disabled:opacity-50">
+              {searching ? "…" : "搜索"}
+            </button>
+          </div>
+          {bindResults !== null && (
+            bindResults.length === 0
+              ? <p className="text-xs text-zinc-400">未找到可绑定的群</p>
+              : <div className="flex flex-col gap-1">
+                  {bindResults.map(c => (
+                    <button key={c.chatId} onClick={() => bindChat(c.chatId)} disabled={busy}
+                      className="text-left rounded-lg px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 border border-zinc-100 disabled:opacity-50">
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ReqDetailClient({
   req: initialReq, event, scheduleItems,
   deptName, deptPeople,
@@ -203,6 +310,18 @@ export default function ReqDetailClient({
                 );
               })}
             </div>
+          </section>
+        )}
+
+        {/* Group chat section */}
+        {(isPocOfDept || canViewFull) && (
+          <section className="mb-6">
+            <p className="text-[11px] font-semibold tracking-widest text-zinc-300 uppercase mb-3">飞书群</p>
+            <ReqChatSection
+              req={req} event={event} productionId={productionId}
+              canManage={isPocOfDept || canViewFull}
+              onChatIdSet={chatId => setReq(r => ({ ...r, chatId }))}
+            />
           </section>
         )}
 

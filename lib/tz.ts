@@ -56,6 +56,16 @@ export function fmtDateTime(iso: string | null | undefined): string {
   return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日 ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
+/** "M月D日 HH:mm", but omits time if it's exactly 00:00 (single-day placeholder) */
+export function fmtDateTimeSmart(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = cst(iso);
+  if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0) {
+    return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`;
+  }
+  return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日 ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
 /** "M月D日" */
 export function fmtDate(iso: string): string {
   const d = cst(iso);

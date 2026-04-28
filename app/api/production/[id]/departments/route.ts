@@ -1,11 +1,14 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, getProductionName, getBossOpenIds } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import {
   listEventDepartments,
   createEventDepartment,
+  getEventDepartment,
+  setDepartmentChatId,
 } from "@/lib/event-db";
+import { createChat } from "@/lib/feishu-chat";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -61,5 +64,22 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     displayOrder,
   });
 
-  return Response.json({ department: dept }, { status: 201 });
+  // Auto-create Feishu group for dept
+  if (kind === "dept") {
+    try {
+      const [productionName, bossIds] = await Promise.all([
+        getProductionName(id),
+        getBossOpenIds(id),
+      ]);
+      const chatName = `${productionName ?? "项目"} - ${name}`;
+      const memberIds = [...new Set([session.openId, ...bossIds])];
+      const chatId = await createChat(chatName, session.openId, memberIds, "only_owner_and_administrator");
+      if (chatId) await setDepartmentChatId(dept.id, chatId);
+    } catch (e) {
+      console.error("[dept/chat] auto-create failed:", e);
+    }
+  }
+
+  const updated = await getEventDepartment(dept.id, id);
+  return Response.json({ department: updated ?? dept }, { status: 201 });
 }

@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { getProductionEvent, getEventTechReq, setTechReqAssignees } from "@/lib/event-db";
+import { addChatMembers } from "@/lib/feishu-chat";
 import { loadEventPermContext, canAssignTechReq } from "@/lib/event-permissions";
 
 type Ctx = { params: Promise<{ id: string; eventId: string; reqId: string }> };
@@ -38,7 +39,16 @@ export async function PUT(req: NextRequest, ctx: Ctx) {
     return Response.json({ error: "assignees 必须是 { openId: string; name: string }[]" }, { status: 400 });
   }
 
+  const prevAssignees = new Set(req_.assignees.map(a => a.openId));
   await setTechReqAssignees(reqId, body.assignees as { openId: string; name: string }[]);
   const updated = await getEventTechReq(reqId, eventId);
+
+  if (updated?.chatId) {
+    const newIds = (body.assignees as { openId: string }[])
+      .map(a => a.openId)
+      .filter(id => !prevAssignees.has(id));
+    if (newIds.length) addChatMembers(updated.chatId, newIds).catch(console.error);
+  }
+
   return Response.json({ techReq: updated });
 }

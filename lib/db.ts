@@ -571,6 +571,17 @@ export async function listProductionMembersWithRoles(productionId: string): Prom
   }));
 }
 
+/** Returns open IDs of all 制作人 and 制作助理 in a production (auto-added to dept chats). */
+export async function getBossOpenIds(productionId: string): Promise<string[]> {
+  const res = await getPool().query<{ open_id: string }>(
+    `SELECT open_id FROM production_member
+     WHERE production_id = $1
+       AND ('制作人' = ANY(roles) OR '制作助理' = ANY(roles))`,
+    [productionId]
+  );
+  return res.rows.map(r => r.open_id);
+}
+
 // ─── Contact import ───────────────────────────────────────────────────────────
 
 export async function findUserByName(name: string): Promise<{ openId: string } | null> {

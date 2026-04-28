@@ -42,6 +42,31 @@ export async function getAppAccessToken(): Promise<string> {
   return data.app_access_token;
 }
 
+export async function getTenantAccessToken(): Promise<string> {
+  const res = await fetch(`${BASE}/auth/v3/tenant_access_token/internal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId(), app_secret: appSecret() }),
+  });
+  const data = await res.json() as { code: number; msg: string; tenant_access_token: string };
+  if (data.code !== 0) throw new Error(`tenant_access_token: ${data.msg}`);
+  return data.tenant_access_token;
+}
+
+/** Returns the bot's own open_id (needed to set bot as chat manager). */
+export async function getBotOpenId(): Promise<string | null> {
+  try {
+    const token = await getTenantAccessToken();
+    const res = await fetch(`${BASE}/bot/v3/info`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json() as { code: number; bot?: { open_id: string } };
+    return data.bot?.open_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── OAuth helpers ────────────────────────────────────────────────────────────
 
 export function buildOAuthUrl(state: string): string {

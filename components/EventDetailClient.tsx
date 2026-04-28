@@ -950,16 +950,20 @@ function PersonCallTimeRow({
             value={callAt} onChange={e => setCallAt(e.target.value)}
             className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm focus:outline-none focus:border-zinc-400 flex-1"
           />
-          <input placeholder="备注" value={notes} onChange={e => setNotes(e.target.value)}
-            className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm focus:outline-none focus:border-zinc-400 w-24" />
           <button onClick={save} className="px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-xs font-medium">设置</button>
           <button onClick={() => setEditing(false)} className="text-xs text-zinc-400">取消</button>
           {callTime && (
             <button onClick={() => { onDelete(); setEditing(false); }} className="text-xs text-red-400">删除</button>
           )}
         </div>
+        <textarea
+          placeholder="备注（可选）"
+          value={notes} onChange={e => setNotes(e.target.value)}
+          rows={2}
+          className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none w-full"
+        />
         {editIsLate && suggestedLocal && (
-          <p className="text-xs text-amber-600 pl-[92px]">
+          <p className="text-xs text-amber-600">
             ⚠ 建议不晚于 {suggestedLocal}（最早需要到场时间提前 15 分钟）
           </p>
         )}
@@ -1786,6 +1790,132 @@ function DeptNotesList({
   );
 }
 
+// ─── EventChatSection ─────────────────────────────────────────────────────────
+
+function EventChatSection({
+  event, productionId, canEdit, onChatIdSet, onChatIdCleared,
+}: {
+  event: ProductionEvent;
+  productionId: string;
+  canEdit: boolean;
+  onChatIdSet: (chatId: string) => void;
+  onChatIdCleared: () => void;
+}) {
+  const [bindQuery, setBindQuery] = useState("");
+  const [bindResults, setBindResults] = useState<{ chatId: string; name: string }[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [showBind, setShowBind] = useState(false);
+
+  async function createChat() {
+    if (!confirm("确定为此事件创建飞书群吗？")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/events/${event.id}/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create" }),
+      });
+      const data = await res.json();
+      if (data.chatId) onChatIdSet(data.chatId);
+      else alert(data.error ?? "建群失败");
+    } finally { setBusy(false); }
+  }
+
+  async function searchBindable() {
+    if (!bindQuery.trim()) return;
+    setSearching(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/chats/bindable?q=${encodeURIComponent(bindQuery)}`);
+      const data = await res.json();
+      setBindResults(data.chats ?? []);
+    } finally { setSearching(false); }
+  }
+
+  async function bindChat(chatId: string) {
+    setBusy(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/events/${event.id}/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "bind", chatId }),
+      });
+      const data = await res.json();
+      if (data.chatId) { onChatIdSet(data.chatId); setShowBind(false); }
+      else alert(data.error ?? "绑定失败");
+    } finally { setBusy(false); }
+  }
+
+  async function unbindChat() {
+    if (!confirm("确定解绑飞书群吗？群本身不会被删除。")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/events/${event.id}/chat`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.ok) onChatIdCleared();
+      else alert(data.error ?? "解绑失败");
+    } finally { setBusy(false); }
+  }
+
+  if (event.chatId) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-zinc-400">飞书群</span>
+        <span className="text-xs bg-blue-50 text-blue-600 rounded-lg px-2 py-1 font-medium">已绑定</span>
+        {canEdit && (
+          <button onClick={unbindChat} disabled={busy}
+            className="text-xs text-zinc-400 hover:text-red-500 disabled:opacity-50 underline">
+            {busy ? "…" : "解绑"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (!canEdit) return null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={createChat} disabled={busy}
+          className="px-3 py-1.5 rounded-lg border border-blue-200 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50">
+          {busy ? "…" : "创建飞书群"}
+        </button>
+        <button onClick={() => setShowBind(b => !b)} disabled={busy}
+          className="px-3 py-1.5 rounded-lg border border-zinc-200 text-sm text-zinc-600 hover:bg-zinc-50">
+          绑定现有群
+        </button>
+      </div>
+      {showBind && (
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input value={bindQuery} onChange={e => setBindQuery(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && searchBindable()}
+              placeholder="搜索群名…"
+              className="flex-1 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-400" />
+            <button onClick={searchBindable} disabled={searching}
+              className="px-3 py-1.5 rounded-lg bg-zinc-100 text-sm text-zinc-600 hover:bg-zinc-200 disabled:opacity-50">
+              {searching ? "…" : "搜索"}
+            </button>
+          </div>
+          {bindResults !== null && (
+            bindResults.length === 0
+              ? <p className="text-xs text-zinc-400">未找到可绑定的群</p>
+              : <div className="flex flex-col gap-1">
+                  {bindResults.map(c => (
+                    <button key={c.chatId} onClick={() => bindChat(c.chatId)} disabled={busy}
+                      className="text-left rounded-lg px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50 border border-zinc-100 disabled:opacity-50">
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PublishTab ───────────────────────────────────────────────────────────────
 
 function ChecklistItem({ done, label }: { done: boolean; label: string }) {
@@ -1802,18 +1932,37 @@ function ChecklistItem({ done, label }: { done: boolean; label: string }) {
 }
 
 function PublishTab({
-  event, productionId, scheduleItems, callTimes, eventPeople, canEdit, onUpdated,
+  event, productionId, scheduleItems, callTimes, eventPeople, techReqs, canEdit, onUpdated,
   onAllTechReqsCompleted,
 }: {
   event: ProductionEvent; productionId: string;
   scheduleItems: EventScheduleItemWithParticipants[];
   callTimes: EventCallTime[];
   eventPeople: { openId: string; name: string }[];
+  techReqs: EventTechReq[];
   canEdit: boolean;
   onUpdated: (ev: ProductionEvent) => void;
   onAllTechReqsCompleted?: () => void;
 }) {
+  const awaitingCount = techReqs.filter(r => r.status === "awaiting").length;
+  const [urging, setUrging] = useState(false);
+
+  async function urgeReqs() {
+    setUrging(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/events/${event.id}/notify-awaiting-reqs`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data.notified != null) alert(`已向 ${data.notified} 个部门群发送催确认通知`);
+      else alert(data.error ?? "发送失败");
+    } finally { setUrging(false); }
+  }
+
   async function changeStatus(status: string) {
+    if (status === "published" && awaitingCount > 0) {
+      if (!confirm(`还有 ${awaitingCount} 个待确认需求未处理，确定要发布吗？`)) return;
+    }
     const res = await fetch(`${BASE_PATH}/api/production/${productionId}/events/${event.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1837,6 +1986,12 @@ function PublishTab({
         </span>
       </div>
 
+      <EventChatSection
+        event={event} productionId={productionId} canEdit={canEdit}
+        onChatIdSet={chatId => onUpdated({ ...event, chatId })}
+        onChatIdCleared={() => onUpdated({ ...event, chatId: null })}
+      />
+
       <div className="flex flex-col gap-2.5">
         <ChecklistItem
           done={!!(event.startTime || event.endTime)}
@@ -1850,6 +2005,18 @@ function PublishTab({
           done={callTimesNeeded > 0 && callTimesSet >= callTimesNeeded}
           label={`Call Time · ${callTimesSet} / ${callTimesNeeded} 人`}
         />
+        <div className="flex items-center gap-3">
+          <ChecklistItem
+            done={awaitingCount === 0}
+            label={awaitingCount === 0 ? "技术需求已全部确认" : `${awaitingCount} 个技术需求待确认`}
+          />
+          {canEdit && awaitingCount > 0 && (
+            <button onClick={urgeReqs} disabled={urging}
+              className="px-2.5 py-1 rounded-lg border border-red-200 text-xs text-red-500 hover:bg-red-50 disabled:opacity-50 shrink-0">
+              {urging ? "…" : "催确认"}
+            </button>
+          )}
+        </div>
       </div>
 
       {canEdit && (
@@ -2133,6 +2300,7 @@ export default function EventDetailClient({
               event={event} productionId={productionId}
               scheduleItems={scheduleItems} callTimes={callTimes}
               eventPeople={eventPeople}
+              techReqs={techReqs}
               canEdit={canEdit}
               onUpdated={setEvent}
             />
