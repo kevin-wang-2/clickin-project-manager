@@ -488,6 +488,7 @@ function ScheduleTab({
   const [newDeptIds, setNewDeptIds] = useState<string[]>([]);
   const [newNotifyDepts, setNewNotifyDepts] = useState<string[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"list" | "table">("list");
 
   const base = `${BASE_PATH}/api/production/${productionId}/events/${eventId}/schedule`;
 
@@ -559,26 +560,50 @@ function ScheduleTab({
 
   return (
     <div className="flex flex-col gap-3">
-      {items.length === 0 && !adding && (
-        <p className="text-sm text-zinc-400 text-center py-6">暂无流程项</p>
+      {departments.length > 0 && (
+        <div className="flex gap-1 self-end">
+          <button onClick={() => setViewMode("list")}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${viewMode === "list" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-700"}`}>
+            流程
+          </button>
+          <button onClick={() => setViewMode("table")}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${viewMode === "table" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-700"}`}>
+            表格
+          </button>
+        </div>
       )}
-      {sortedItems.map(item => (
-        <ScheduleItemRow key={item.id} item={item}
-          canEdit={canEdit} canAssignPeople={canAssignPeople} members={members}
-          editing={editingId === item.id}
-          onEdit={() => setEditingId(editingId === item.id ? null : item.id)}
-          onSaved={updated => onItemsChange(items.map(i => i.id === updated.id ? updated : i))}
-          onDelete={() => deleteItem(item.id)}
-          base={base}
-          minTime={minAttr} maxTime={maxAttr}
+      {viewMode === "table" ? (
+        <ScheduleTableView
+          eventId={eventId} productionId={productionId}
+          items={items} onItemsChange={onItemsChange}
+          canEdit={canEdit} canAssignPeople={canAssignPeople}
+          members={members} departments={departments}
           singleDay={singleDay} eventDate={eventDate}
-          departments={departments}
-          productionId={productionId} eventId={eventId}
+          eventStart={eventStart} eventEnd={eventEnd}
           onTechReqsCreated={onTechReqsCreated}
         />
-      ))}
+      ) : (
+        <>
+          {items.length === 0 && !adding && (
+            <p className="text-sm text-zinc-400 text-center py-6">暂无流程项</p>
+          )}
+          {sortedItems.map(item => (
+            <ScheduleItemRow key={item.id} item={item}
+              canEdit={canEdit} canAssignPeople={canAssignPeople} members={members}
+              editing={editingId === item.id}
+              onEdit={() => setEditingId(editingId === item.id ? null : item.id)}
+              onSaved={updated => onItemsChange(items.map(i => i.id === updated.id ? updated : i))}
+              onDelete={() => deleteItem(item.id)}
+              base={base}
+              minTime={minAttr} maxTime={maxAttr}
+              singleDay={singleDay} eventDate={eventDate}
+              departments={departments}
+              productionId={productionId} eventId={eventId}
+              onTechReqsCreated={onTechReqsCreated}
+            />
+          ))}
 
-      {canEdit && (
+          {canEdit && (
         adding ? (
           <div className="rounded-xl bg-white shadow-sm p-4 flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-2">
@@ -657,6 +682,8 @@ function ScheduleTab({
             + 添加流程项
           </button>
         )
+      )}
+        </>
       )}
     </div>
   );
@@ -864,6 +891,569 @@ function ScheduleItemRow({
         <button onClick={onEdit} className="text-xs text-zinc-400 hover:text-zinc-600 shrink-0">编辑</button>
       )}
     </div>
+  );
+}
+
+// ─── ScheduleTableView ───────────────────────────────────────────────────────
+
+function gcdNum(a: number, b: number): number { return b === 0 ? a : gcdNum(b, a % b); }
+
+function computeBlockMinutes(items: EventScheduleItemWithParticipants[]): number {
+  const durations: number[] = [];
+  for (const item of items) {
+    if (item.startTime && item.endTime) {
+      const d = (new Date(item.endTime).getTime() - new Date(item.startTime).getTime()) / 60000;
+      if (d > 0) durations.push(d);
+    }
+  }
+  if (durations.length === 0) return 30;
+  const g = durations.reduce(gcdNum);
+  const niceIntervals = [5, 10, 15, 20, 30, 60];
+  return niceIntervals.find(n => n >= g) ?? 60;
+}
+
+type ModalState =
+  | { mode: "edit"; item: EventScheduleItemWithParticipants }
+  | { mode: "new"; startTime: string | null; deptId: string | null };
+
+function ScheduleItemModal({
+  state, eventId, productionId, items, onItemsChange, canAssignPeople,
+  members, departments, singleDay, eventDate, eventStart, eventEnd,
+  onTechReqsCreated, onClose,
+}: {
+  state: ModalState;
+  eventId: string; productionId: string;
+  items: EventScheduleItemWithParticipants[];
+  onItemsChange: (items: EventScheduleItemWithParticipants[]) => void;
+  canAssignPeople: boolean;
+  members: MemberWithRoles[];
+  departments: EventDepartment[];
+  singleDay: boolean; eventDate: string;
+  eventStart: string | null; eventEnd: string | null;
+  onTechReqsCreated?: (reqs: EventTechReq[]) => void;
+  onClose: () => void;
+}) {
+  const base = `${BASE_PATH}/api/production/${productionId}/events/${eventId}/schedule`;
+  const minAttr = eventStart ? toLocalInput(eventStart) : undefined;
+  const maxAttr = eventEnd ? toLocalInput(eventEnd) : undefined;
+
+  const isEdit = state.mode === "edit";
+  const existing = isEdit ? state.item : null;
+
+  const defaultStartStr = !isEdit && state.startTime
+    ? (singleDay ? isoToTimeInput(state.startTime) : isoToDatetimeLocal(state.startTime))
+    : (existing ? (singleDay ? isoToTimeInput(existing.startTime) : isoToDatetimeLocal(existing.startTime)) : "");
+  const defaultEndStr = existing
+    ? (singleDay ? isoToTimeInput(existing.endTime) : isoToDatetimeLocal(existing.endTime))
+    : "";
+  const defaultDeptIds = !isEdit && state.deptId
+    ? [state.deptId]
+    : (existing?.departmentIds ?? []);
+
+  const [title, setTitle] = useState(existing?.title ?? "");
+  const [itemType, setItemType] = useState(existing?.itemType ?? "custom");
+  const [startVal, setStartVal] = useState(defaultStartStr);
+  const [endVal, setEndVal] = useState(defaultEndStr);
+  const [location, setLocation] = useState(existing?.location ?? "");
+  const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [deptIds, setDeptIds] = useState<string[]>(defaultDeptIds);
+  const [participants, setParticipants] = useState<ScheduleItemParticipant[]>(existing?.participants ?? []);
+  const [saving, setSaving] = useState(false);
+  const [notifyDepts, setNotifyDepts] = useState<string[]>([]);
+
+  function resolveTime(val: string): string | null {
+    if (!val) return null;
+    return datetimeLocalToIso(singleDay && eventDate ? `${eventDate}T${val}` : val);
+  }
+
+  async function save() {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      if (isEdit && existing) {
+        const res = await fetch(`${base}/${existing.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title.trim(), itemType,
+            startTime: resolveTime(startVal), endTime: resolveTime(endVal),
+            location: location.trim(), notes: notes.trim(),
+            departmentIds: deptIds,
+          }),
+        });
+        const data = await res.json();
+        if (!data.item) return;
+        if (canAssignPeople) {
+          await fetch(`${base}/${existing.id}/participants`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ participants }),
+          });
+        }
+        onItemsChange(items.map(i => i.id === existing.id
+          ? { ...data.item, participants, departmentIds: deptIds } : i));
+      } else {
+        const res = await fetch(base, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: title.trim(), itemType,
+            startTime: resolveTime(startVal), endTime: resolveTime(endVal),
+            location: location.trim(), notes: notes.trim(),
+            orderIndex: items.length,
+            departmentIds: deptIds,
+          }),
+        });
+        const data = await res.json();
+        if (!data.item) return;
+        const newId: string = data.item.id;
+        let savedParticipants: ScheduleItemParticipant[] = [];
+        if (canAssignPeople && participants.length > 0) {
+          await fetch(`${base}/${newId}/participants`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ participants }),
+          });
+          savedParticipants = participants;
+        }
+        if (notifyDepts.length > 0) {
+          const awRes = await fetch(
+            `${BASE_PATH}/api/production/${productionId}/events/${eventId}/awaiting-reqs`,
+            { method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ departmentIds: notifyDepts, scheduleItemId: newId }) }
+          );
+          if (awRes.ok && onTechReqsCreated) {
+            const awData = await awRes.json() as { techReqs: EventTechReq[] };
+            onTechReqsCreated(awData.techReqs);
+          }
+        }
+        onItemsChange([...items, { ...data.item, participants: savedParticipants, departmentIds: deptIds }]);
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!existing) return;
+    await fetch(`${base}/${existing.id}`, { method: "DELETE" });
+    onItemsChange(items.filter(i => i.id !== existing.id));
+    onClose();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 flex flex-col gap-3 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-zinc-800">{isEdit ? "编辑流程项" : "添加流程项"}</h3>
+          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600 text-lg leading-none">&times;</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <input placeholder="流程标题 *" value={title} onChange={e => setTitle(e.target.value)}
+            className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+          <select value={itemType} onChange={e => setItemType(e.target.value)}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400">
+            {Object.entries(SCHEDULE_ITEM_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <input placeholder="地点" value={location} onChange={e => setLocation(e.target.value)}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+          {singleDay ? (
+            <>
+              <input type="time" value={startVal} onChange={e => setStartVal(e.target.value)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+              <input type="time" value={endVal} onChange={e => setEndVal(e.target.value)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+            </>
+          ) : (
+            <>
+              <input type="datetime-local" value={startVal} min={minAttr} max={maxAttr} onChange={e => setStartVal(e.target.value)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+              <input type="datetime-local" value={endVal} min={minAttr} max={maxAttr} onChange={e => setEndVal(e.target.value)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
+            </>
+          )}
+          <textarea placeholder="备注" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+            className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
+        </div>
+
+        {canAssignPeople && members.length > 0 && (
+          <div className="pt-2 border-t border-zinc-100">
+            <p className="text-xs text-zinc-400 mb-2">参与人员</p>
+            <ParticipantPicker
+              members={members} selected={participants} onChange={setParticipants}
+              departments={departments} selectedDeptIds={deptIds} onDeptIdsChange={setDeptIds}
+            />
+          </div>
+        )}
+
+        {!isEdit && departments.length > 0 && (
+          <div className="pt-2 border-t border-zinc-100">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs text-zinc-400">通知部门（创建待确认需求）</p>
+              <button type="button"
+                onClick={() => setNotifyDepts(notifyDepts.length === departments.length ? [] : departments.map(d => d.id))}
+                className="text-xs text-zinc-400 hover:text-zinc-600">
+                {notifyDepts.length === departments.length ? "取消全选" : "全选"}
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {departments.map(d => (
+                <button key={d.id} type="button"
+                  onClick={() => setNotifyDepts(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}
+                  className={`rounded-full px-3 py-1 text-xs border transition-colors ${
+                    notifyDepts.includes(d.id) ? "bg-zinc-800 text-white border-zinc-800" : "bg-white text-zinc-500 border-zinc-200 hover:border-zinc-400"
+                  }`}>{d.name}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={save} disabled={saving}
+            className="px-4 py-1.5 rounded-lg bg-zinc-800 text-white text-sm font-medium disabled:opacity-50">
+            {saving ? "…" : isEdit ? "保存" : "添加"}
+          </button>
+          <button onClick={onClose} className="text-sm text-zinc-500 hover:text-zinc-700">取消</button>
+          {isEdit && (
+            <button onClick={remove} className="ml-auto text-sm text-red-400 hover:text-red-600">删除</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleTableView({
+  eventId, productionId, items, onItemsChange, canEdit, canAssignPeople,
+  members, departments, singleDay, eventDate, eventStart, eventEnd, onTechReqsCreated,
+}: {
+  eventId: string; productionId: string;
+  items: EventScheduleItemWithParticipants[];
+  onItemsChange: (items: EventScheduleItemWithParticipants[]) => void;
+  canEdit: boolean; canAssignPeople: boolean;
+  members: MemberWithRoles[];
+  departments: EventDepartment[];
+  singleDay: boolean; eventDate: string;
+  eventStart: string | null; eventEnd: string | null;
+  onTechReqsCreated?: (reqs: EventTechReq[]) => void;
+}) {
+  const [modal, setModal] = useState<ModalState | null>(null);
+
+  const timedItems = useMemo(
+    () => items.filter(i => i.startTime && i.endTime).sort(
+      (a, b) => new Date(a.startTime!).getTime() - new Date(b.startTime!).getTime()
+    ),
+    [items]
+  );
+
+  const blockMinutes = useMemo(() => computeBlockMinutes(timedItems), [timedItems]);
+
+  const { startMs, endMs, totalBlocks } = useMemo(() => {
+    if (timedItems.length === 0) return { startMs: 0, endMs: 0, totalBlocks: 0 };
+    const s = Math.min(...timedItems.map(i => new Date(i.startTime!).getTime()));
+    const e = Math.max(...timedItems.map(i => new Date(i.endTime!).getTime()));
+    const blockMs = blockMinutes * 60000;
+    const startSnapped = Math.floor(s / blockMs) * blockMs;
+    const endSnapped = Math.ceil(e / blockMs) * blockMs;
+    return {
+      startMs: startSnapped,
+      endMs: endSnapped,
+      totalBlocks: Math.round((endSnapped - startSnapped) / blockMs),
+    };
+  }, [timedItems, blockMinutes]);
+
+  // columns: departments + "其他"
+  const cols = useMemo(() => {
+    const hasOther = timedItems.some(i =>
+      i.departmentIds.length === 0 || i.itemType === "break"
+        ? false
+        : i.departmentIds.some(id => !departments.find(d => d.id === id))
+    );
+    const deptCols = departments.map(d => ({ id: d.id, name: d.name, isOther: false }));
+    const otherItems = timedItems.filter(i =>
+      i.itemType !== "break" && i.departmentIds.length > 0 &&
+      i.departmentIds.some(id => !departments.find(d => d.id === id))
+    );
+    return otherItems.length > 0
+      ? [...deptCols, { id: "__other__", name: "其他", isOther: true }]
+      : deptCols;
+  }, [timedItems, departments]);
+
+  const numDataCols = cols.length || 1;
+  const MIN_COL_PX = 100;
+  const gridCols = `60px repeat(${numDataCols}, minmax(${MIN_COL_PX}px, 1fr))`;
+  const gridMinWidth = 60 + numDataCols * MIN_COL_PX;
+
+  function timeToRow(ms: number): number {
+    return Math.round((ms - startMs) / (blockMinutes * 60000)) + 1;
+  }
+
+  function itemSpansContiguousCols(item: EventScheduleItemWithParticipants): { colStart: number; colSpan: number } | null {
+    if (item.departmentIds.length === 0) return null;
+    const colIndices = item.departmentIds
+      .map(id => cols.findIndex(c => c.id === id))
+      .filter(i => i >= 0)
+      .sort((a, b) => a - b);
+    if (colIndices.length === 0) return null;
+    const min = colIndices[0];
+    const max = colIndices[colIndices.length - 1];
+    // check contiguous
+    for (let i = min; i <= max; i++) {
+      if (!colIndices.includes(i)) return null;
+    }
+    return { colStart: min + 2, colSpan: max - min + 1 }; // +2 because col 1 is time label
+  }
+
+  if (timedItems.length === 0) {
+    return (
+      <div className="text-sm text-zinc-400 text-center py-10">
+        暂无带时间的流程项
+        {canEdit && (
+          <button onClick={() => setModal({ mode: "new", startTime: null, deptId: null })}
+            className="block mx-auto mt-3 text-zinc-500 hover:text-zinc-700 underline">
+            + 添加流程项
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const blockMs = blockMinutes * 60000;
+  // Show a label every LABEL_EVERY blocks; always show first and last
+  const LABEL_EVERY = blockMinutes <= 20 ? 2 : 1;
+  const labelledBlocks = new Set<number>();
+  for (let b = 0; b <= totalBlocks; b++) {
+    if (b === 0 || b === totalBlocks || b % LABEL_EVERY === 0) labelledBlocks.add(b);
+  }
+  // grid row = b + 2 (row 1 is header); tail goes to totalBlocks + 2 (implicit row) to avoid collision
+  const timeLabels = Array.from(labelledBlocks).map(b => ({
+    b,
+    row: b < totalBlocks ? b + 2 : totalBlocks + 2,
+    label: fmtTime(new Date(startMs + b * blockMs).toISOString()),
+  }));
+
+  // Rotating palette — each dept column gets a distinct color
+  const DEPT_PALETTE = [
+    "bg-blue-500   hover:bg-blue-600   text-white",
+    "bg-violet-500 hover:bg-violet-600 text-white",
+    "bg-teal-500   hover:bg-teal-600   text-white",
+    "bg-rose-400   hover:bg-rose-500   text-white",
+    "bg-amber-500  hover:bg-amber-600  text-white",
+    "bg-indigo-500 hover:bg-indigo-600 text-white",
+    "bg-emerald-500 hover:bg-emerald-600 text-white",
+    "bg-orange-400 hover:bg-orange-500 text-white",
+  ];
+  // Map deptId → palette class; "__other__" and no-dept → slate neutral
+  const deptColorMap = new Map<string, string>();
+  cols.forEach((col, i) => {
+    if (!col.isOther) deptColorMap.set(col.id, DEPT_PALETTE[i % DEPT_PALETTE.length]);
+  });
+
+  // render cells
+  type Cell = {
+    item: EventScheduleItemWithParticipants;
+    rowStart: number; rowSpan: number;
+    colStart: number; colSpan: number;
+    isBreak: boolean;
+  };
+
+  // Pass 1: all non-break cells
+  const nonBreakCells: Cell[] = [];
+  for (const item of timedItems) {
+    if (item.itemType === "break") continue;
+    const rowStart = timeToRow(new Date(item.startTime!).getTime());
+    const rowSpan = Math.max(1, timeToRow(new Date(item.endTime!).getTime()) - rowStart);
+    if (item.departmentIds.length === 0) {
+      nonBreakCells.push({ item, rowStart, rowSpan, colStart: 2, colSpan: numDataCols, isBreak: false });
+    } else {
+      const contiguous = itemSpansContiguousCols(item);
+      if (contiguous) {
+        nonBreakCells.push({ item, rowStart, rowSpan, ...contiguous, isBreak: false });
+      } else {
+        for (const deptId of item.departmentIds) {
+          const colIdx = cols.findIndex(c => c.id === deptId);
+          if (colIdx >= 0) nonBreakCells.push({ item, rowStart, rowSpan, colStart: colIdx + 2, colSpan: 1, isBreak: false });
+        }
+      }
+    }
+  }
+
+  // Pass 2: break items
+  const breakCells: Cell[] = [];
+  for (const item of timedItems) {
+    if (item.itemType !== "break") continue;
+    const rowStart = timeToRow(new Date(item.startTime!).getTime());
+    const rowSpan = Math.max(1, timeToRow(new Date(item.endTime!).getTime()) - rowStart);
+
+    if (item.departmentIds.length > 0) {
+      // Has departments: constrain to those columns, same as regular items
+      const contiguous = itemSpansContiguousCols(item);
+      if (contiguous) {
+        breakCells.push({ item, rowStart, rowSpan, ...contiguous, isBreak: true });
+      } else {
+        for (const deptId of item.departmentIds) {
+          const colIdx = cols.findIndex(c => c.id === deptId);
+          if (colIdx >= 0) breakCells.push({ item, rowStart, rowSpan, colStart: colIdx + 2, colSpan: 1, isBreak: true });
+        }
+      }
+    } else {
+      // No departments: fill all columns not occupied by non-break items
+      const occupied = new Set<number>();
+      for (const other of nonBreakCells) {
+        if (rowStart < other.rowStart + other.rowSpan && rowStart + rowSpan > other.rowStart) {
+          for (let ci = other.colStart - 2; ci < other.colStart - 2 + other.colSpan; ci++) occupied.add(ci);
+        }
+      }
+      let runStart: number | null = null;
+      for (let ci = 0; ci <= numDataCols; ci++) {
+        const free = ci < numDataCols && !occupied.has(ci);
+        if (free && runStart === null) { runStart = ci; }
+        else if (!free && runStart !== null) {
+          breakCells.push({ item, rowStart, rowSpan, colStart: runStart + 2, colSpan: ci - runStart, isBreak: true });
+          runStart = null;
+        }
+      }
+    }
+  }
+
+  const cells = [...nonBreakCells, ...breakCells];
+
+  return (
+    <>
+      <div className="overflow-x-auto">
+      <div
+        className="relative"
+        style={{ display: "grid", gridTemplateColumns: gridCols, gridTemplateRows: `auto repeat(${totalBlocks}, ${Math.max(24, Math.round(600 / totalBlocks))}px)`, minWidth: gridMinWidth }}
+      >
+        {/* header row */}
+        <div style={{ gridColumn: 1, gridRow: 1 }} className="sticky top-0 bg-white z-10" />
+        {cols.map((col, ci) => (
+          <div key={col.id} style={{ gridColumn: ci + 2, gridRow: 1 }}
+            className="sticky top-0 bg-white z-10 text-center text-xs font-medium text-zinc-500 border-b border-zinc-100 py-1.5 px-1">
+            {col.name}
+          </div>
+        ))}
+        {cols.length === 0 && (
+          <div style={{ gridColumn: 2, gridRow: 1 }}
+            className="sticky top-0 bg-white z-10 text-center text-xs font-medium text-zinc-400 border-b border-zinc-100 py-1.5">
+            流程项
+          </div>
+        )}
+
+        {/* time labels */}
+        {timeLabels.map(({ b, row, label }) => (
+          <div key={b} style={{ gridColumn: 1, gridRow: row }}
+            className="flex items-start justify-end pr-2 text-[10px] text-zinc-400 select-none pointer-events-none">
+            {label}
+          </div>
+        ))}
+
+        {/* grid lines — extend into col 1 at labelled rows for visual alignment */}
+        {Array.from({ length: totalBlocks }).map((_, b) => {
+          const isLabelled = labelledBlocks.has(b);
+          return (
+            <div key={b}
+              style={{ gridColumn: isLabelled ? `1 / span ${numDataCols + 1}` : `2 / span ${numDataCols}`, gridRow: b + 2 }}
+              className={`border-t pointer-events-none ${isLabelled ? "border-zinc-200" : "border-zinc-100"}`} />
+          );
+        })}
+
+        {/* click-to-add cells */}
+        {canEdit && Array.from({ length: totalBlocks }).map((_, b) =>
+          cols.map((col, ci) => {
+            const ms = startMs + b * blockMs;
+            return (
+              <div key={`${b}-${ci}`}
+                style={{ gridColumn: ci + 2, gridRow: b + 2 }}
+                className="cursor-pointer hover:bg-blue-50/40 transition-colors"
+                onClick={() => setModal({
+                  mode: "new",
+                  startTime: new Date(ms).toISOString(),
+                  deptId: col.isOther ? null : col.id,
+                })} />
+            );
+          })
+        )}
+
+        {/* items */}
+        {cells.map((cell, idx) => {
+          // color: break → neutral; full-width no-dept → slate; single/multi-dept → first covered dept's color
+          const firstCoveredDeptId = (() => {
+            for (let i = 0; i < cell.colSpan; i++) {
+              const colIdx = cell.colStart - 2 + i;
+              if (colIdx >= 0 && colIdx < cols.length && !cols[colIdx].isOther) return cols[colIdx].id;
+            }
+            return null;
+          })();
+          const colorCls = cell.isBreak
+            ? "bg-zinc-100 text-zinc-400"
+            : (deptColorMap.get(firstCoveredDeptId ?? "") ?? "bg-slate-500 hover:bg-slate-600 text-white");
+
+          // filter participants to those belonging to covered dept columns
+          const coveredDeptIds: string[] = [];
+          for (let i = 0; i < cell.colSpan; i++) {
+            const colIdx = cell.colStart - 2 + i;
+            if (colIdx >= 0 && colIdx < cols.length && !cols[colIdx].isOther) {
+              coveredDeptIds.push(cols[colIdx].id);
+            }
+          }
+          const showAllParticipants = coveredDeptIds.length === 0 || coveredDeptIds.length === cols.length;
+          const deptMemberSet = showAllParticipants ? null : new Set(
+            coveredDeptIds.flatMap(id => departments.find(d => d.id === id)?.memberOpenIds ?? [])
+          );
+          const relevantParticipants = showAllParticipants
+            ? cell.item.participants
+            : (cell.item.participants.filter(p => deptMemberSet!.has(p.openId)) || cell.item.participants);
+          const displayParticipants = relevantParticipants.length > 0 ? relevantParticipants : cell.item.participants;
+
+          return (
+            <div key={`${cell.item.id}-${idx}`}
+              style={{ gridColumn: `${cell.colStart} / span ${cell.colSpan}`, gridRow: `${cell.rowStart + 1} / span ${cell.rowSpan}` }}
+              className={`z-10 m-px rounded overflow-hidden flex flex-col justify-start p-1 text-[11px] leading-tight cursor-pointer select-none transition-colors ${colorCls}${cell.isBreak ? " items-center justify-center" : ""}`}
+              onClick={() => canEdit && setModal({ mode: "edit", item: cell.item })}
+            >
+              <span className="font-medium truncate w-full">{cell.item.title}</span>
+              {!cell.isBreak && cell.item.location && (
+                <span className="opacity-70 truncate w-full">{cell.item.location}</span>
+              )}
+              {!cell.isBreak && displayParticipants.length > 0 && (
+                <span className="opacity-80 truncate w-full mt-0.5">
+                  {displayParticipants.map(p => p.name).join("、")}
+                </span>
+              )}
+              {!cell.isBreak && cell.item.notes && (
+                <span className="opacity-60 w-full mt-0.5 break-words italic">{cell.item.notes}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      </div>
+
+      {canEdit && (
+        <button onClick={() => setModal({ mode: "new", startTime: null, deptId: null })}
+          className="rounded-xl border-2 border-dashed border-zinc-200 py-3 text-sm text-zinc-400 hover:border-zinc-300 hover:text-zinc-500 transition-colors">
+          + 添加流程项
+        </button>
+      )}
+
+      {modal && (
+        <ScheduleItemModal
+          state={modal}
+          eventId={eventId} productionId={productionId}
+          items={items} onItemsChange={onItemsChange}
+          canAssignPeople={canAssignPeople}
+          members={members} departments={departments}
+          singleDay={singleDay} eventDate={eventDate}
+          eventStart={eventStart} eventEnd={eventEnd}
+          onTechReqsCreated={onTechReqsCreated}
+          onClose={() => setModal(null)}
+        />
+      )}
+    </>
   );
 }
 
