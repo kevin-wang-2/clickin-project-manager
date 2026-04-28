@@ -9,6 +9,7 @@ import {
   listEventReports,
   isUserEventTechAssignee,
   getSelfParticipantRole,
+  listEventDepartments,
 } from "@/lib/event-db";
 import { REPORT_VIEWER_ROLES } from "@/lib/event-permissions";
 import EventFollowerClient from "@/components/EventFollowerClient";
@@ -37,11 +38,12 @@ export default async function EventViewPage({
   if (!canViewFull && !VISIBLE_STATUSES.has(event.status))
     redirect(`/production/${productionId}/events`);
 
-  const [scheduleItems, reports, isAssignee, selfRole] = await Promise.all([
+  const [scheduleItems, reports, isAssignee, selfRole, departments] = await Promise.all([
     listScheduleItemsWithParticipants(eventId),
     listEventReports(eventId),
     isUserEventTechAssignee(eventId, session.openId),
     getSelfParticipantRole(eventId, session.openId),
+    listEventDepartments(productionId),
   ]);
 
   const isReportViewer = session.isAdmin || memberRoles?.some(r => REPORT_VIEWER_ROLES.has(r)) || false;
@@ -53,6 +55,7 @@ export default async function EventViewPage({
       eventId={eventId}
       event={event}
       scheduleItems={scheduleItems}
+      departments={departments}
       reports={visibleReports}
       isAssignee={isAssignee}
       selfParticipantRole={selfRole}
