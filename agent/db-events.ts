@@ -1,5 +1,169 @@
 import { getScriptEditorPool } from "./db";
 
+// ── Call / tech-req types for personal queries ────────────────────────────────
+
+export type UserCallEntry = {
+  callAt: Date;
+  callNotes: string;
+  eventId: string;
+  eventTitle: string;
+  eventLocation: string;
+  productionName: string;
+  scheduleItems: { title: string; startTime: Date | null }[];
+};
+
+export type MyTechReqEntry = {
+  id: string;
+  title: string;
+  status: string;
+  role: "assignee" | "poc";
+  eventId: string;
+  eventTitle: string;
+  productionName: string;
+  departmentName: string | null;
+};
+
+/** Call times for a specific user on a given date (YYYY-MM-DD CST, default today). */
+export async function getDailyCallForUser(openId: string, dateStr?: string): Promise<UserCallEntry[]> {
+  const pool = getScriptEditorPool();
+  const d = dateStr ?? (() => {
+    const nowCst = new Date(Date.now() + 8 * 3_600_000);
+    return `${nowCst.getUTCFullYear()}-${String(nowCst.getUTCMonth() + 1).padStart(2, "0")}-${String(nowCst.getUTCDate()).padStart(2, "0")}`;
+  })();
+
+  const [callsRes] = await Promise.all([
+    pool.query<{
+      call_at: Date; call_notes: string;
+      event_id: string; event_title: string; event_location: string; production_name: string;
+    }>(
+      `SELECT ect.call_at, ect.notes AS call_notes,
+              pe.id AS event_id, pe.title AS event_title,
+              pe.location AS event_location, p.name AS production_name
+       FROM event_call_time ect
+       JOIN production_event pe ON pe.id = ect.event_id
+       JOIN production p ON p.id = pe.production_id
+       WHERE ect.open_id = $1 AND ect.call_at >= $2 AND ect.call_at < $3
+       ORDER BY ect.call_at`,
+      [openId, `${d}T00:00:00+08:00`, `${d}T23:59:59.999+08:00`],
+    ),
+  ]);
+
+  if (!callsRes.rows.length) return [];
+
+  const eventIds = [...new Set(callsRes.rows.map(r => r.event_id))];
+  const schedRes = await pool.query<{ event_id: string; title: string; start_time: Date | null }>(
+    `SELECT event_id, title, start_time FROM event_schedule_item
+     WHERE event_id = ANY($1) ORDER BY event_id, order_index`,
+    [eventIds],
+  );
+  const schedByEvent = new Map<string, { title: string; startTime: Date | null }[]>();
+  for (const r of schedRes.rows) {
+    if (!schedByEvent.has(r.event_id)) schedByEvent.set(r.event_id, []);
+    schedByEvent.get(r.event_id)!.push({ title: r.title, startTime: r.start_time });
+  }
+
+  return callsRes.rows.map(r => ({
+    callAt: r.call_at,
+    callNotes: r.call_notes,
+    eventId: r.event_id,
+    eventTitle: r.event_title,
+    eventLocation: r.event_location,
+    productionName: r.production_name,
+    scheduleItems: schedByEvent.get(r.event_id) ?? [],
+  }));
+}
+
+/** Call times for a specific user over the next 7 days (CST). */
+export async function getWeeklyCallForUser(openId: string): Promise<UserCallEntry[]> {
+  const pool = getScriptEditorPool();
+  const nowCst = new Date(Date.now() + 8 * 3_600_000);
+  const todayStr = `${nowCst.getUTCFullYear()}-${String(nowCst.getUTCMonth() + 1).padStart(2, "0")}-${String(nowCst.getUTCDate()).padStart(2, "0")}`;
+  const weekStart = `${todayStr}T00:00:00+08:00`;
+  const weekEnd   = new Date(Date.UTC(
+    nowCst.getUTCFullYear(), nowCst.getUTCMonth(), nowCst.getUTCDate() + 7, 16, 0, 0,
+  )).toISOString(); // D+7 00:00 CST = D+6 16:00 UTC
+
+  const callsRes = await pool.query<{
+    call_at: Date; call_notes: string;
+    event_id: string; event_title: string; event_location: string; production_name: string;
+  }>(
+    `SELECT ect.call_at, ect.notes AS call_notes,
+            pe.id AS event_id, pe.title AS event_title,
+            pe.location AS event_location, p.name AS production_name
+     FROM event_call_time ect
+     JOIN production_event pe ON pe.id = ect.event_id
+     JOIN production p ON p.id = pe.production_id
+     WHERE ect.open_id = $1 AND ect.call_at >= $2 AND ect.call_at < $3
+     ORDER BY ect.call_at`,
+    [openId, weekStart, weekEnd],
+  );
+
+  if (!callsRes.rows.length) return [];
+
+  const eventIds = [...new Set(callsRes.rows.map(r => r.event_id))];
+  const schedRes = await pool.query<{ event_id: string; title: string; start_time: Date | null }>(
+    `SELECT event_id, title, start_time FROM event_schedule_item
+     WHERE event_id = ANY($1) ORDER BY event_id, order_index`,
+    [eventIds],
+  );
+  const schedByEvent = new Map<string, { title: string; startTime: Date | null }[]>();
+  for (const r of schedRes.rows) {
+    if (!schedByEvent.has(r.event_id)) schedByEvent.set(r.event_id, []);
+    schedByEvent.get(r.event_id)!.push({ title: r.title, startTime: r.start_time });
+  }
+
+  return callsRes.rows.map(r => ({
+    callAt: r.call_at,
+    callNotes: r.call_notes,
+    eventId: r.event_id,
+    eventTitle: r.event_title,
+    eventLocation: r.event_location,
+    productionName: r.production_name,
+    scheduleItems: schedByEvent.get(r.event_id) ?? [],
+  }));
+}
+
+/** Unfinished tech reqs where the user is assignee (non-done) or dept POC (awaiting). */
+export async function getMyTechReqs(openId: string): Promise<MyTechReqEntry[]> {
+  const pool = getScriptEditorPool();
+  const res = await pool.query<{
+    id: string; title: string; status: string; role: string;
+    event_id: string; event_title: string;
+    production_name: string; department_name: string | null;
+  }>(
+    `SELECT etr.id, etr.title, etr.status, 'assignee' AS role,
+            pe.id AS event_id, pe.title AS event_title,
+            p.name AS production_name, ed.name AS department_name
+     FROM event_tech_req etr
+     JOIN event_tech_assignee eta ON eta.req_id = etr.id AND eta.open_id = $1
+     JOIN production_event pe ON pe.id = etr.event_id
+     JOIN production p ON p.id = pe.production_id
+     LEFT JOIN event_department ed ON ed.id = etr.department_id
+     WHERE etr.status NOT IN ('done', 'cancelled')
+       AND pe.status NOT IN ('completed', 'cancelled')
+     UNION
+     SELECT etr.id, etr.title, etr.status, 'poc' AS role,
+            pe.id AS event_id, pe.title AS event_title,
+            p.name AS production_name, ed.name AS department_name
+     FROM event_tech_req etr
+     JOIN event_department ed ON ed.id = etr.department_id
+     JOIN event_department_member edm
+       ON edm.department_id = etr.department_id AND edm.open_id = $1 AND edm.is_poc = true
+     JOIN production_event pe ON pe.id = etr.event_id
+     JOIN production p ON p.id = pe.production_id
+     WHERE etr.status = 'awaiting'
+       AND pe.status NOT IN ('completed', 'cancelled')
+     ORDER BY event_title, title`,
+    [openId],
+  );
+  return res.rows.map(r => ({
+    id: r.id, title: r.title, status: r.status,
+    role: r.role as "assignee" | "poc",
+    eventId: r.event_id, eventTitle: r.event_title,
+    productionName: r.production_name, departmentName: r.department_name,
+  }));
+}
+
 // ── Filter types ───────────────────────────────────────────────────────────────
 
 export type EventFilters = {
