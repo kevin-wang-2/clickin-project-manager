@@ -9,6 +9,9 @@ import { queryEventsSkill } from "./query-events/index";
 import { getEventDetailSkill } from "./get-event-detail/index";
 import { listSkillsSkill, setSecondaryPrompt } from "./list-skills/index";
 import { setTaskAnchorSkill } from "./set-task-anchor/index";
+import { getDailyCallSkill } from "./get-daily-call/index";
+import { getWeeklyCallSkill } from "./get-weekly-call/index";
+import { getMyTechReqsSkill } from "./get-my-tech-reqs/index";
 import type { BotContext } from "../types";
 import type { SkillConfig, SkillParamDef } from "./_types";
 
@@ -40,12 +43,15 @@ export const ANCHOR_EXEMPT_SKILLS = new Set(["reply", "send_card", "set_task_anc
 
 // Secondary: hidden by default, returned by list_skills on demand
 const secondarySkills: AnySkill[] = [
-  viewCardSkill        as unknown as AnySkill,
-  getHistorySkill      as unknown as AnySkill,
-  getChatInfoSkill     as unknown as AnySkill,
-  getProductionsSkill  as unknown as AnySkill,
-  queryEventsSkill     as unknown as AnySkill,
-  getEventDetailSkill  as unknown as AnySkill,
+  viewCardSkill          as unknown as AnySkill,
+  getHistorySkill        as unknown as AnySkill,
+  getChatInfoSkill       as unknown as AnySkill,
+  getProductionsSkill    as unknown as AnySkill,
+  queryEventsSkill       as unknown as AnySkill,
+  getEventDetailSkill    as unknown as AnySkill,
+  getDailyCallSkill      as unknown as AnySkill,
+  getWeeklyCallSkill     as unknown as AnySkill,
+  getMyTechReqsSkill     as unknown as AnySkill,
 ];
 
 export const skillRegistry: Record<string, AnySkill> = {
@@ -60,6 +66,9 @@ export const skillRegistry: Record<string, AnySkill> = {
   query_events:      queryEventsSkill      as unknown as AnySkill,
   get_event_detail:  getEventDetailSkill   as unknown as AnySkill,
   set_task_anchor:   setTaskAnchorSkill    as unknown as AnySkill,
+  get_daily_call:    getDailyCallSkill     as unknown as AnySkill,
+  get_weekly_call:   getWeeklyCallSkill    as unknown as AnySkill,
+  get_my_tech_reqs:  getMyTechReqsSkill   as unknown as AnySkill,
 };
 
 function formatSkill(s: AnySkill): string {

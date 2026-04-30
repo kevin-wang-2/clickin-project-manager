@@ -236,7 +236,8 @@ function enforceConstraints(response: AgentResponse): AgentResponse {
     console.warn("[agent] enforcing wait_reply=true for focus_production");
     return { ...response, wait_reply: true };
   }
-  if ((response.skill === "query_events" || response.skill === "get_event_detail") && response.wait_reply) {
+  const queryOnlySkills = new Set(["query_events", "get_event_detail", "get_daily_call", "get_weekly_call", "get_my_tech_reqs"]);
+  if (queryOnlySkills.has(response.skill) && response.wait_reply) {
     console.warn(`[agent] enforcing wait_reply=false for ${response.skill}`);
     return { ...response, wait_reply: false };
   }
