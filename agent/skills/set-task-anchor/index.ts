@@ -8,8 +8,7 @@ type SetTaskAnchorArgs = {
   type?: string;
   subject?: string;
   goal?: string;
-  status?: string;
-  confidence?: number;
+  description?: string;
 };
 
 export const setTaskAnchorSkill: SkillModule<SetTaskAnchorArgs> = {
@@ -22,19 +21,18 @@ export const setTaskAnchorSkill: SkillModule<SetTaskAnchorArgs> = {
     }
 
     if (args.action === "set") {
-      if (!args.type || !args.subject || !args.goal || !args.status || args.confidence === undefined) {
-        return "❌ action=set 时必须同时提供 type、subject、goal、status 和 confidence。";
+      if (!args.type || !args.subject || !args.goal || !args.description) {
+        return "❌ action=set 时必须同时提供 type、subject、goal 和 description。";
       }
       const anchor: TaskAnchor = {
-        type:       args.type       as TaskAnchor["type"],
-        subject:    args.subject,
-        goal:       args.goal,
-        status:     args.status     as TaskAnchor["status"],
-        confidence: args.confidence,
+        type:        args.type as TaskAnchor["type"],
+        subject:     args.subject,
+        goal:        args.goal,
+        description: args.description,
       };
       await setTaskAnchor(ctx.trigger.chatId, anchor);
       ctx.taskAnchor = anchor;
-      return `任务锚点已设置：${anchor.subject}（类型：${anchor.type}，置信度 ${anchor.confidence}）。`;
+      return `任务锚点已设置：${anchor.subject}（类型：${anchor.type}）。`;
     }
 
     return `❌ 未知 action：${String(args.action)}`;
