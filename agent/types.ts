@@ -10,8 +10,7 @@ export type TaskAnchor = {
   type: "creative_discussion" | "event_query" | "data_update" | "unknown";
   subject: string;
   goal: string;
-  status: "active" | "paused" | "completed";
-  confidence: number;
+  description: string;
 };
 
 export type HistoryMessage = {

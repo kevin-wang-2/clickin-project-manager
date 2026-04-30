@@ -142,56 +142,35 @@ function snapshotToCtx(snap: CtxSnapshot): BotContext {
   };
 }
 
+const TYPE_LABEL: Record<string, string> = {
+  creative_discussion: "创意/规划讨论",
+  event_query:         "事件数据查询",
+  data_update:         "数据修改/录入",
+  unknown:             "未知",
+};
+
 function formatTaskAnchorPrompt(anchor: TaskAnchor | undefined): string {
   if (!anchor) {
-    return `# 当前任务锚点
+    return `# 当前任务（最高优先级）
 （未设置）
 
 你目前没有活跃的任务锚点。请先通过对话明确用户意图，再调用 set_task_anchor 建立锚点。
 在锚点建立之前，你只能使用 reply、send_card 和 set_task_anchor 技能。`;
   }
 
-  const typeLabel: Record<string, string> = {
-    creative_discussion: "创意/规划讨论",
-    event_query:         "事件数据查询",
-    data_update:         "数据修改/录入",
-    unknown:             "未知",
-  };
-  const statusLabel: Record<string, string> = {
-    active:    "进行中",
-    paused:    "暂停中",
-    completed: "已完成",
-  };
-  const typeRules: Record<string, string[]> = {
-    creative_discussion: [
-      "优先延续该任务，不主动发起 production 数据查询",
-      "禁止调用 query_events / get_event_detail 等查询类技能，除非用户明确要求",
-    ],
-    event_query: [
-      "优先使用 query_events / get_event_detail 技能完成查询",
-      "如未设置 production，请先通过 focus_production 确认",
-    ],
-    data_update: [
-      "执行数据修改前必须向用户确认，严禁根据推测自动填写字段",
-    ],
-    unknown: [
-      "先通过 reply 澄清用户意图，确认后及时更新任务锚点的 type",
-    ],
-  };
+  return `# 当前任务（最高优先级）
 
-  const rules = typeRules[anchor.type] ?? [];
-  const rulesStr = rules.map(r => `- ${r}`).join("\n");
-
-  return `# 当前任务（最高优先级，不可忽略）
-
-类型：${typeLabel[anchor.type] ?? anchor.type}
+类型：${TYPE_LABEL[anchor.type] ?? anchor.type}
 主题：${anchor.subject}
 目标：${anchor.goal}
-状态：${statusLabel[anchor.status] ?? anchor.status}
-置信度：${anchor.confidence}
+
+说明：
+${anchor.description}
 
 规则：
-${rulesStr}`;
+- 优先延续该任务
+- 禁止调用查询类技能，除非用户明确要求
+- 若与 memory 冲突，以当前任务为准`;
 }
 
 async function attachProductionContext(ctx: BotContext): Promise<void> {

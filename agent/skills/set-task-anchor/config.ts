@@ -30,16 +30,10 @@ export const config: SkillConfig = {
       description: "action=set 时必填。本次任务的具体目标（如「查询下周排练的集合时间」）",
     },
     {
-      name: "status",
-      type: '"active" | "paused" | "completed"',
+      name: "description",
+      type: "string",
       required: false,
-      description: "action=set 时必填。active=进行中，paused=已暂停，completed=已完成",
-    },
-    {
-      name: "confidence",
-      type: "number",
-      required: false,
-      description: "action=set 时必填。对任务意图理解的置信度，0.0–1.0（低于 0.7 时应先 reply 澄清再设置）",
+      description: "action=set 时必填。对当前任务的自然语言说明，描述背景、约束或注意事项（1–3 句话）",
     },
   ],
 };
