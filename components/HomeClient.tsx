@@ -87,6 +87,7 @@ export default function HomeClient({ productions: initial, isAdmin, currentUser,
             <h1 className="text-sm font-bold tracking-[0.2em] text-zinc-400 uppercase">项目管理器</h1>
             <div className="flex items-center gap-3">
               <span className="text-xs text-zinc-400">{currentUser.name}</span>
+              <Link href="/my/notifications" className="text-xs text-zinc-300 hover:text-zinc-500 transition-colors">通知</Link>
               <form action={`${BASE_PATH}/api/auth/logout`} method="post">
                 <button type="submit" className="text-xs text-zinc-300 hover:text-zinc-500 transition-colors">
                   退出
