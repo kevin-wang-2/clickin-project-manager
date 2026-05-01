@@ -12,6 +12,9 @@ import { setTaskAnchorSkill } from "./set-task-anchor/index";
 import { getDailyCallSkill } from "./get-daily-call/index";
 import { getWeeklyCallSkill } from "./get-weekly-call/index";
 import { getMyTechReqsSkill } from "./get-my-tech-reqs/index";
+import { getBlockByIdSkill } from "./get-block-by-id/index";
+import { getBlockByLineSkill } from "./get-block-by-line/index";
+import { searchBlocksSkill } from "./search-blocks/index";
 import type { BotContext } from "../types";
 import type { SkillConfig, SkillParamDef } from "./_types";
 
@@ -52,6 +55,9 @@ const secondarySkills: AnySkill[] = [
   getDailyCallSkill      as unknown as AnySkill,
   getWeeklyCallSkill     as unknown as AnySkill,
   getMyTechReqsSkill     as unknown as AnySkill,
+  getBlockByIdSkill      as unknown as AnySkill,
+  getBlockByLineSkill    as unknown as AnySkill,
+  searchBlocksSkill      as unknown as AnySkill,
 ];
 
 export const skillRegistry: Record<string, AnySkill> = {
@@ -69,6 +75,9 @@ export const skillRegistry: Record<string, AnySkill> = {
   get_daily_call:    getDailyCallSkill     as unknown as AnySkill,
   get_weekly_call:   getWeeklyCallSkill    as unknown as AnySkill,
   get_my_tech_reqs:  getMyTechReqsSkill   as unknown as AnySkill,
+  get_block_by_id:   getBlockByIdSkill    as unknown as AnySkill,
+  get_block_by_line: getBlockByLineSkill  as unknown as AnySkill,
+  search_blocks:     searchBlocksSkill    as unknown as AnySkill,
 };
 
 function formatSkill(s: AnySkill): string {
