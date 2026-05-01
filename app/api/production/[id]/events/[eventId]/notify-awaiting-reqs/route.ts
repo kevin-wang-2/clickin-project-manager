@@ -11,7 +11,8 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, listEventTechReqs, getEventDepartment } from "@/lib/event-db";
-import { sendChatCard, buildUrgeReqCard } from "@/lib/feishu-bot";
+import { sendChatCard, sendCard, buildUrgeReqCard } from "@/lib/feishu-bot";
+import { getOptedInUsers } from "@/lib/notification-prefs";
 import { BASE_PATH } from "@/lib/base-path";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
@@ -57,6 +58,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     await sendChatCard(dept.chatId, card).catch(e =>
       console.error(`[notify-awaiting] dept ${deptId} failed:`, e)
     );
+    // Extra personal DM for POCs who opted in to tech_req_poc
+    getOptedInUsers("tech_req_poc").then((optedIn) => {
+      for (const pocId of dept.pocOpenIds) {
+        if (optedIn.has(pocId)) sendCard(pocId, card).catch(e => console.error("[notify-awaiting] personal dm failed:", e));
+      }
+    }).catch(() => {});
     notified++;
   }
 

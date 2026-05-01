@@ -3,7 +3,8 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, upsertAwaitingTechReqs, getEventDepartment } from "@/lib/event-db";
-import { sendChatCard, buildAwaitingReqCard } from "@/lib/feishu-bot";
+import { sendChatCard, sendCard, buildAwaitingReqCard } from "@/lib/feishu-bot";
+import { getOptedInUsers } from "@/lib/notification-prefs";
 import { BASE_PATH } from "@/lib/base-path";
 import { getPool } from "@/lib/pg";
 
@@ -45,6 +46,12 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     const url = `https://applink.feishu.cn/client/web_app/open?appId=${appId}&path=${encodeURIComponent(reqPath)}`;
     const card = buildAwaitingReqCard(req.title || dept.name, event.title, dept.name, dept.pocOpenIds, url);
     sendChatCard(dept.chatId, card).catch(e => console.error("[awaiting-req] notify failed:", e));
+    // Extra personal DM for POCs who opted in to tech_req_poc
+    getOptedInUsers("tech_req_poc").then((optedIn) => {
+      for (const pocId of dept.pocOpenIds) {
+        if (optedIn.has(pocId)) sendCard(pocId, card).catch(e => console.error("[awaiting-req] personal dm failed:", e));
+      }
+    }).catch(() => {});
   }
 
   return Response.json({ techReqs });

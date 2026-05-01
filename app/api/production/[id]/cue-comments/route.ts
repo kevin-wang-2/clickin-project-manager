@@ -4,6 +4,7 @@ import { getProductionMemberContext, listProductionComments, createComment, getC
 import type { Mention } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { sendBotDm } from "@/lib/feishu-bot";
+import { getOptedOutUsers } from "@/lib/notification-prefs";
 
 async function guard(req: NextRequest, productionId: string) {
   const session = getSession(req.cookies);
@@ -57,11 +58,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const productionName = await getProductionName(productionId).catch(() => null);
     const prefix = productionName ? `《${productionName}》` : "制作";
     const notifyText = `${session.name} 在${prefix}的 Cue 评论中提到了你：\n${text}`;
-    for (const m of mentions) {
-      sendBotDm(m.openId, notifyText).catch(e =>
-        console.error(`[mention] notify failed for ${m.openId}:`, (e as Error).message)
-      );
-    }
+    getOptedOutUsers("comment_mention").then((optedOut) => {
+      for (const m of mentions) {
+        if (optedOut.has(m.openId)) continue;
+        sendBotDm(m.openId, notifyText).catch(e =>
+          console.error(`[mention] notify failed for ${m.openId}:`, (e as Error).message)
+        );
+      }
+    }).catch(() => {});
   }
 
   return Response.json({ comment }, { status: 201 });

@@ -10,6 +10,7 @@ import {
 } from "./feishu-bot";
 import { listAllReportMentionedOpenIds } from "./event-db";
 import { createCardToken } from "./card-token";
+import { getOptedOutUsers } from "./notification-prefs";
 
 /** Builds a Feishu H5 web-app deep link for in-app rendering. */
 function feishuCardUrl(pathAndQuery: string): string {
@@ -54,7 +55,10 @@ export async function dispatchWeeklyCall(dryRun = false): Promise<DispatchResult
   const errors: string[] = [];
   const dryCards: { openId: string; card: object }[] = [];
 
+  const weeklyOptedOut = await getOptedOutUsers("weekly_call");
+
   for (const { open_id } of usersRes.rows) {
+    if (weeklyOptedOut.has(open_id)) continue;
     try {
       const entries = await getWeeklyCallDataForUser(open_id, weekStart, weekEnd);
       if (!entries.length) continue;
@@ -277,10 +281,12 @@ export async function dispatchDailyCallForEvent(eventId: string, dryRun = false)
   const errors: string[] = [];
   const dryCards: { openId: string; card: object }[] = [];
 
+  const dailyOptedOut = await getOptedOutUsers("daily_call");
   const seen = new Set<string>();
   for (const row of callsRes.rows) {
     if (seen.has(row.open_id)) continue;
     seen.add(row.open_id);
+    if (dailyOptedOut.has(row.open_id)) continue;
     try {
       const token = createCardToken(row.open_id, "daily-call", dailyTokenExp);
       const callsheetUrl = feishuCardUrl(`${BASE_PATH}/my/daily-call/${dateStr}/${token}`);
@@ -365,7 +371,10 @@ export async function dispatchReportNotification(
   const errors: string[] = [];
   const dryCards: { openId: string; card: object }[] = [];
 
+  const reportOptedOut = await getOptedOutUsers("report_broadcast");
+
   for (const { open_id } of recipRes.rows) {
+    if (reportOptedOut.has(open_id)) continue;
     try {
       const token = createCardToken(open_id, `report:${reportId}`, reportTokenExp);
       const url = feishuCardUrl(`${reportBasePath}/${token}`);
@@ -414,7 +423,10 @@ export async function dispatchMentionNotifications(
   const reportBasePath = `${BASE_PATH}/production/${productionId}/events/${eventId}/reports/${reportId}`;
   const tokenExp = new Date(Date.now() + 30 * 24 * 3_600_000);
 
+  const mentionOptedOut = await getOptedOutUsers("report_mention");
+
   for (const openId of mentionedOpenIds) {
+    if (mentionOptedOut.has(openId)) continue;
     try {
       const token = createCardToken(openId, `report:${reportId}`, tokenExp);
       const url = feishuCardUrl(`${reportBasePath}/${token}`);
