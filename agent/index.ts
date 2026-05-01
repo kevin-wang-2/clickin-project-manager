@@ -221,8 +221,10 @@ async function runAsyncSkill(
   const checkpoint = [...messages, { role: "assistant" as const, content: raw }];
 
   // Notify user that we are processing, before we go off to do the query.
-  const pendingMsg =
-    skillRegistry[response.skill]?.config.pendingMessage ?? "收到，正在处理，请稍候…";
+  const pmCfgAsync = skillRegistry[response.skill]?.config.pendingMessage;
+  const pendingMsg = typeof pmCfgAsync === "function"
+    ? pmCfgAsync(response.args)
+    : (pmCfgAsync ?? "收到，正在处理，请稍候…");
   await replySkill.run(ctx, { text: pendingMsg });
 
   await saveSession(key, checkpoint, ctxSnapshot(ctx), REPLY_TIMEOUT_MS);
@@ -322,7 +324,10 @@ async function runLoop(ctx: BotContext, initialMessages: Message[], cancelToken?
 
     // Sync execution path
     if (!SILENT_SKILLS.has(response.skill)) {
-      const pendingMsg = skillRegistry[response.skill]?.config.pendingMessage ?? "正在处理，请稍候…";
+      const pmCfg = skillRegistry[response.skill]?.config.pendingMessage;
+      const pendingMsg = typeof pmCfg === "function"
+        ? pmCfg(response.args)
+        : (pmCfg ?? "正在处理，请稍候…");
       await replySkill.run(ctx, { text: pendingMsg });
     }
 

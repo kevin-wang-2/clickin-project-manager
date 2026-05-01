@@ -17,9 +17,9 @@ export type SkillConfig = {
   //         saves the session BEFORE executing so the user can interrupt,
   //         then auto-resumes when the result arrives.
   mode?: "sync" | "async";
-  // Message sent to the user automatically while an async skill is executing.
-  // The backend sends this before saving the session; the LLM should NOT reply itself.
-  pendingMessage?: string;
+  // Message sent to the user automatically while a skill is executing.
+  // Can be a static string or a function of the parsed args for context-specific text.
+  pendingMessage?: string | ((args: unknown) => string);
   // Override / coerce fields in the LLM's JSON output before acting on it.
   // Return the response unchanged if no coercion is needed.
   constrain?: (response: AgentResponse) => AgentResponse;
