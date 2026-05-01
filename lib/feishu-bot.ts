@@ -298,3 +298,30 @@ export function buildUrgeReqCard(
     ],
   };
 }
+
+export function buildCueWarningCard(
+  productionName: string,
+  cueListName: string,
+  cueNumber: string,
+  cueName: string,
+  url: string,
+): object {
+  const cueLabel = cueName ? `#${cueNumber} ${cueName}` : `#${cueNumber}`;
+  const body = [
+    `**制作：** ${productionName}　**Cue 表：** ${cueListName}`,
+    `**Cue：** ${cueLabel}`,
+  ].join("\n");
+
+  return {
+    config: { wide_screen_mode: true },
+    header: { title: { tag: "plain_text", content: "⚠️ Cue 报警" }, template: "red" },
+    elements: [
+      { tag: "div", text: { tag: "lark_md", content: body } },
+      { tag: "hr" },
+      {
+        tag: "action",
+        actions: [{ tag: "button", text: { tag: "plain_text", content: "查看 Cue 表" }, url, type: "primary" }],
+      },
+    ],
+  };
+}
