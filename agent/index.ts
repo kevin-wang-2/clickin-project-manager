@@ -413,6 +413,9 @@ export async function processMessage(ctx: BotContext): Promise<void> {
     await deleteSession(key);
     console.log(`[agent] resuming session key=${key} expired=${pending.expired}`);
 
+    // Re-attach productionContext and taskAnchor from DB (not stored in snapshot)
+    await attachProductionContext(ctx);
+
     if (pending.expired) {
       initialMessages = [
         ...pending.messages,
