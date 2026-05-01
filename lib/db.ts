@@ -142,6 +142,17 @@ export async function saveScriptConfig(productionId: string, config: ScriptConfi
   );
 }
 
+/** Stores a pre-computed page map keyed by layout name for agent queries. */
+export async function savePageMap(
+  productionId: string,
+  pageMap: Record<string, Record<string, number>>,
+): Promise<void> {
+  await getPool().query(
+    "UPDATE production SET page_map = $1 WHERE id = $2",
+    [JSON.stringify(pageMap), productionId]
+  );
+}
+
 // ─── Write ────────────────────────────────────────────────────────────────────
 
 export async function flushToDB(productionId: string, payload: FlushPayload): Promise<void> {

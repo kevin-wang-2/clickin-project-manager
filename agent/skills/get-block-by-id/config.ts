@@ -14,5 +14,9 @@ export const config: SkillConfig = {
       required: true,
     },
   ],
+  pendingMessage: (a) => {
+    const id = (a as { block_id?: string })?.block_id;
+    return id ? `正在读取 Block ${id.slice(0, 8)}…` : "正在读取台词块…";
+  },
   constrain: (r) => ({ ...r, wait_reply: false }),
 };

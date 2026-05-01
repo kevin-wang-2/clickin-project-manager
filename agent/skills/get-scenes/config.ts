@@ -7,5 +7,6 @@ export const config: SkillConfig = {
   enabled: true,
   mode: "sync",
   params: [],
+  pendingMessage: "正在读取章节列表…",
   constrain: (r) => ({ ...r, wait_reply: false }),
 };

@@ -93,6 +93,18 @@ export async function getPageMapForProduction(
   layout = "a4",
 ): Promise<Record<string, number>> {
   const pool = getScriptEditorPool();
+
+  // Use server-cached page map when available (written by server-cache after each flush)
+  const prodRes = await pool.query<{ page_map: Record<string, Record<string, number>> | null }>(
+    "SELECT page_map FROM production WHERE id = $1",
+    [productionId],
+  );
+  const stored = prodRes.rows[0]?.page_map;
+  if (stored && stored[layout] && Object.keys(stored[layout]).length > 0) {
+    return stored[layout];
+  }
+
+  // Fall back to on-demand computation from blocks
   const blocksRes = await pool.query<{
     id: string; type: string; content: string; scene_id: string | null;
   }>(
@@ -172,7 +184,7 @@ function toBlockRow(r: RawBlockRow): Omit<ScriptBlockRow, "characters"> {
 }
 
 const selectCols = `s.id, o.line_num, s.type, s.content, s.rehearsal_mark,
-  sc.name AS scene_name, sc.number AS scene_number`;
+  sc.name AS scene_name, sc.num AS scene_number`;
 const joinClause = `JOIN ordered o ON o.id = s.id LEFT JOIN scene sc ON sc.id = s.scene_id`;
 
 export async function getBlockById(
@@ -238,6 +250,173 @@ export async function getBlockCount(productionId: string): Promise<number> {
     [productionId],
   );
   return parseInt(res.rows[0].count, 10);
+}
+
+// ── Block query (filtered) ─────────────────────────────────────────────────────
+
+export type QueryBlocksFilter = {
+  page?:          number | null;
+  type?:          "dialogue" | "stage" | "lyric" | null;
+  scene?:         string | null;  // partial match on scene name or number
+  rehearsalMark?: string | null;  // partial match
+  limit?:         number;
+};
+
+export async function queryBlocks(
+  productionId: string,
+  filter: QueryBlocksFilter,
+): Promise<ScriptBlockRow[]> {
+  const pool = getScriptEditorPool();
+  const { page, type, scene, rehearsalMark, limit = 30 } = filter;
+
+  const params: unknown[] = [productionId];
+  const conditions: string[] = [];
+
+  if (type) {
+    const dbType = type === "lyric" ? "lyric" : type;
+    params.push(dbType);
+    conditions.push(`s.type = $${params.length}::block_type`);
+  }
+  if (scene) {
+    params.push(`%${scene}%`);
+    const p = params.length;
+    conditions.push(`(sc.name ILIKE $${p} OR sc.num ILIKE $${p})`);
+  }
+  if (rehearsalMark) {
+    params.push(`%${rehearsalMark}%`);
+    conditions.push(`s.rehearsal_mark ILIKE $${params.length}`);
+  }
+
+  const whereExtra = conditions.length ? " AND " + conditions.join(" AND ") : "";
+  // Overfetch when filtering by page so we have enough candidates after post-filtering
+  params.push(page != null ? limit * 15 : limit);
+
+  const res = await pool.query<RawBlockRow>(
+    `${lineNumCTE}
+     SELECT ${selectCols} FROM script s ${joinClause}
+     WHERE s.production_id = $1${whereExtra}
+     ORDER BY o.line_num LIMIT $${params.length}`,
+    params,
+  );
+
+  const rows = await attachCharacters(pool, res.rows.map(toBlockRow));
+  if (page == null) return rows;
+
+  const pageMap = await getPageMapForProduction(productionId);
+  return rows
+    .map(r => ({ ...r, pageNum: pageMap[r.id] ?? null }))
+    .filter(r => r.pageNum === page)
+    .slice(0, limit);
+}
+
+// ── Script meta ───────────────────────────────────────────────────────────────
+
+export type PageRangeEntry = {
+  pageNum:    number;
+  firstLine:  number;
+  lastLine:   number;
+  blockCount: number;
+};
+
+export type ScriptMetaResult = {
+  productionName:  string;
+  pageLayout:      string;
+  stageDelimOpen:  string;
+  stageDelimClose: string;
+  totalBlocks:     number;
+  totalScenes:     number;
+  totalCharacters: number;
+  totalPages:      number;
+  pageRanges:      PageRangeEntry[];   // per-page line ranges
+  lineToPage:      Record<number, number>; // line_num → page_num
+};
+
+export async function getScriptMeta(productionId: string): Promise<ScriptMetaResult | null> {
+  const pool = getScriptEditorPool();
+
+  const prodRes = await pool.query<{
+    name:          string;
+    script_config: Record<string, string> | null;
+    page_map:      Record<string, Record<string, number>> | null;
+    block_count:   string;
+    scene_count:   string;
+    char_count:    string;
+  }>(
+    `SELECT p.name, p.script_config, p.page_map,
+       (SELECT COUNT(*) FROM script    WHERE production_id = p.id)::text AS block_count,
+       (SELECT COUNT(*) FROM scene     WHERE production_id = p.id)::text AS scene_count,
+       (SELECT COUNT(*) FROM character WHERE production_id = p.id)::text AS char_count
+     FROM production p WHERE p.id = $1`,
+    [productionId],
+  );
+  if (prodRes.rowCount === 0) return null;
+
+  const pr = prodRes.rows[0];
+  const layout      = pr.script_config?.pageLayout      ?? "a4";
+  const delimOpen   = pr.script_config?.stageDelimOpen  ?? "（";
+  const delimClose  = pr.script_config?.stageDelimClose ?? "）";
+  const totalBlocks = parseInt(pr.block_count, 10);
+  const totalScenes = parseInt(pr.scene_count, 10);
+  const totalChars  = parseInt(pr.char_count, 10);
+
+  // Resolve page map (from stored cache or on-demand)
+  let rawMap: Record<string, number> = {};
+  const stored = pr.page_map;
+  if (stored && stored[layout] && Object.keys(stored[layout]).length > 0) {
+    rawMap = stored[layout];
+  } else {
+    rawMap = await getPageMapForProduction(productionId, layout);
+  }
+
+  if (Object.keys(rawMap).length === 0) {
+    return {
+      productionName: pr.name, pageLayout: layout, stageDelimOpen: delimOpen,
+      stageDelimClose: delimClose, totalBlocks, totalScenes, totalCharacters: totalChars,
+      totalPages: 0, pageRanges: [], lineToPage: {},
+    };
+  }
+
+  // Join page map with line numbers via a single SQL query
+  const joinRes = await pool.query<{ line_num: string; page_num: string }>(
+    `WITH blocks_ordered AS (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY sort_key) AS line_num
+       FROM script WHERE production_id = $1
+     ),
+     page_entries AS (
+       SELECT key AS block_id, value::int AS page_num
+       FROM jsonb_each_text($2::jsonb)
+     )
+     SELECT bo.line_num::text, pe.page_num::text
+     FROM page_entries pe
+     JOIN blocks_ordered bo ON bo.id = pe.block_id
+     ORDER BY bo.line_num`,
+    [productionId, JSON.stringify(rawMap)],
+  );
+
+  const lineToPage: Record<number, number> = {};
+  const pageAgg = new Map<number, { first: number; last: number; count: number }>();
+
+  for (const r of joinRes.rows) {
+    const ln = parseInt(r.line_num, 10);
+    const pn = parseInt(r.page_num, 10);
+    lineToPage[ln] = pn;
+    const agg = pageAgg.get(pn);
+    if (!agg) pageAgg.set(pn, { first: ln, last: ln, count: 1 });
+    else { agg.last = Math.max(agg.last, ln); agg.count++; }
+  }
+
+  const pageRanges: PageRangeEntry[] = Array.from(pageAgg.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([pageNum, { first, last, count }]) => ({
+      pageNum, firstLine: first, lastLine: last, blockCount: count,
+    }));
+
+  return {
+    productionName: pr.name, pageLayout: layout, stageDelimOpen: delimOpen,
+    stageDelimClose: delimClose, totalBlocks, totalScenes, totalCharacters: totalChars,
+    totalPages: pageRanges.length > 0 ? pageRanges[pageRanges.length - 1].pageNum : 0,
+    pageRanges, lineToPage,
+  };
 }
 
 // ── Scenes ────────────────────────────────────────────────────────────────────

@@ -17,6 +17,8 @@ import { getBlockByLineSkill } from "./get-block-by-line/index";
 import { searchBlocksSkill } from "./search-blocks/index";
 import { getScenesSkill } from "./get-scenes/index";
 import { getCharactersSkill } from "./get-characters/index";
+import { queryBlocksSkill } from "./query-blocks/index";
+import { getScriptMetaSkill } from "./get-script-meta/index";
 import type { BotContext } from "../types";
 import type { SkillConfig, SkillParamDef } from "./_types";
 
@@ -62,6 +64,8 @@ const secondarySkills: AnySkill[] = [
   searchBlocksSkill      as unknown as AnySkill,
   getScenesSkill         as unknown as AnySkill,
   getCharactersSkill     as unknown as AnySkill,
+  queryBlocksSkill       as unknown as AnySkill,
+  getScriptMetaSkill     as unknown as AnySkill,
 ];
 
 export const skillRegistry: Record<string, AnySkill> = {
@@ -84,6 +88,8 @@ export const skillRegistry: Record<string, AnySkill> = {
   search_blocks:     searchBlocksSkill    as unknown as AnySkill,
   get_scenes:        getScenesSkill       as unknown as AnySkill,
   get_characters:    getCharactersSkill   as unknown as AnySkill,
+  query_blocks:      queryBlocksSkill     as unknown as AnySkill,
+  get_script_meta:   getScriptMetaSkill   as unknown as AnySkill,
 };
 
 function formatSkill(s: AnySkill): string {

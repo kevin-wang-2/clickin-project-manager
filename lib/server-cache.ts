@@ -1,8 +1,10 @@
 import type { Block, Character, Scene, ScriptState, ScriptConfig } from "./script-types";
 import { DEFAULT_SCRIPT_CONFIG } from "./script-types";
 import type { BlockOp, CharOp, SceneOp, ScriptPatch } from "./script-ops";
-import { flushToDB } from "./db";
+import { flushToDB, savePageMap } from "./db";
 import type { DbBlock } from "./db";
+import { computePageMap } from "./script-page";
+import type { PageLayout } from "./script-types";
 import {
   blockToFields,
   batchCreateRecords,
@@ -639,6 +641,8 @@ async function flushToFeishu(entry: CacheEntry): Promise<void> {
   }
 }
 
+const ALL_LAYOUTS: PageLayout[] = ["a4", "letter", "a3-2col", "tablet-2col"];
+
 async function flush(entry: CacheEntry) {
   if (entry.flushTimer !== null) {
     clearTimeout(entry.flushTimer);
@@ -659,6 +663,13 @@ async function flush(entry: CacheEntry) {
     upsertScenes: Array.from(d.scenes.values()).map(s => ({ ...s, sortOrder: sceneOrder.get(s.id) ?? 0 })),
     deleteSceneIds: Array.from(d.deletedSceneIds),
   });
+
+  // Non-blocking: compute and persist page map for all layouts after blocks are saved
+  const blocks: Block[] = entry.blocks.map(({ orderKey: _ok, lexKey: _lk, ...b }) => b);
+  savePageMap(
+    entry.scriptId,
+    Object.fromEntries(ALL_LAYOUTS.map(layout => [layout, computePageMap(blocks, layout)])),
+  ).catch(err => console.error("[page-map] save error:", err));
 
   await flushToFeishu(entry).catch(err => {
     console.error("[feishu] flush error:", err);

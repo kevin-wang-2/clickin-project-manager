@@ -21,5 +21,11 @@ export const config: SkillConfig = {
       required: false,
     },
   ],
+  pendingMessage: (a) => {
+    const args = a as { query?: string; page?: number };
+    const q = args?.query ? `「${args.query}」` : "";
+    const pg = args?.page != null ? `（第 ${args.page} 页）` : "";
+    return `正在全文搜索${q}${pg}…`;
+  },
   constrain: (r) => ({ ...r, wait_reply: false }),
 };

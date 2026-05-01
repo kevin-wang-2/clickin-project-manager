@@ -14,5 +14,9 @@ export const config: SkillConfig = {
       required: true,
     },
   ],
+  pendingMessage: (a) => {
+    const line = (a as { line?: number })?.line;
+    return line != null ? `正在读取第 ${line} 行…` : "正在读取台词块…";
+  },
   constrain: (r) => ({ ...r, wait_reply: false }),
 };
