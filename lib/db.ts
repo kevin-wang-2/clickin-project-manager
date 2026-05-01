@@ -1065,6 +1065,17 @@ function anchorToDb(a: CueAnchor) {
   return { kind: "block", blockId: a.blockId, offset: a.offset };
 }
 
+export async function getCue(id: string, cueListId: string): Promise<Cue | null> {
+  const res = await getPool().query<CueRow>(
+    `SELECT id, cue_list_id, number, name, content,
+            start_kind, start_block_id, start_offset,
+            end_kind, end_block_id, end_offset, warning
+     FROM cue WHERE id = $1 AND cue_list_id = $2`,
+    [id, cueListId]
+  );
+  return res.rows.length ? rowToCue(res.rows[0]) : null;
+}
+
 export async function listCues(cueListId: string): Promise<Cue[]> {
   const res = await getPool().query<CueRow>(
     `SELECT id, cue_list_id, number, name, content,
