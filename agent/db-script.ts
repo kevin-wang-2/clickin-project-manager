@@ -239,3 +239,110 @@ export async function getBlockCount(productionId: string): Promise<number> {
   );
   return parseInt(res.rows[0].count, 10);
 }
+
+// ── Scenes ────────────────────────────────────────────────────────────────────
+
+export type SceneRow = {
+  id:               string;
+  number:           string;
+  name:             string | null;
+  parentId:         string | null;
+  synopsis:         string | null;
+  actionLine:       string | null;
+  music:            string | null;
+  stageNotes:       string | null;
+  expectedDuration: number | null; // minutes
+  blockCount:       number;
+};
+
+export async function getScenesForProduction(productionId: string): Promise<SceneRow[]> {
+  const pool = getScriptEditorPool();
+  const res = await pool.query<{
+    id: string; num: string; name: string | null; parent_id: string | null;
+    synopsis: string | null; action_line: string | null; music: string | null;
+    stage_notes: string | null; expected_duration: number | null; block_count: string;
+  }>(
+    `SELECT sc.id, sc.num, sc.name, sc.parent_id,
+            sc.synopsis, sc.action_line, sc.music, sc.stage_notes, sc.expected_duration,
+            COUNT(s.id)::text AS block_count
+     FROM scene sc
+     LEFT JOIN script s ON s.scene_id = sc.id AND s.production_id = $1
+     WHERE sc.production_id = $1
+     GROUP BY sc.id
+     ORDER BY sc.sort_order`,
+    [productionId],
+  );
+  return res.rows.map(r => ({
+    id:               r.id,
+    number:           r.num,
+    name:             r.name,
+    parentId:         r.parent_id,
+    synopsis:         r.synopsis,
+    actionLine:       r.action_line,
+    music:            r.music,
+    stageNotes:       r.stage_notes,
+    expectedDuration: r.expected_duration,
+    blockCount:       parseInt(r.block_count, 10),
+  }));
+}
+
+// ── Characters ────────────────────────────────────────────────────────────────
+
+export type CharacterRow = {
+  id:          string;
+  name:        string;
+  roleType:    string | null;
+  gender:      string | null;
+  biography:   string | null;
+  isAggregate: boolean;
+  members:     string[]; // names of member characters (for aggregate chars)
+  blockCount:  number;
+};
+
+export async function getCharactersForProduction(productionId: string): Promise<CharacterRow[]> {
+  const pool = getScriptEditorPool();
+  const res = await pool.query<{
+    id: string; name: string; role_type: string | null; gender: string | null;
+    biography: string | null; is_aggregate: boolean; block_count: string;
+  }>(
+    `SELECT c.id, c.name, c.role_type, c.gender, c.biography, c.is_aggregate,
+            COUNT(DISTINCT sc.script_id)::text AS block_count
+     FROM character c
+     LEFT JOIN script_character sc ON sc.character_id = c.id
+     WHERE c.production_id = $1
+     GROUP BY c.id
+     ORDER BY c.sort_order, c.name`,
+    [productionId],
+  );
+
+  if (res.rows.length === 0) return [];
+
+  // Fetch aggregate members
+  const aggregateIds = res.rows.filter(r => r.is_aggregate).map(r => r.id);
+  const memberMap = new Map<string, string[]>();
+  if (aggregateIds.length > 0) {
+    const membRes = await pool.query<{ aggregate_id: string; member_name: string }>(
+      `SELECT ca.aggregate_id, c.name AS member_name
+       FROM character_aggregate ca
+       JOIN character c ON c.id = ca.member_id
+       WHERE ca.aggregate_id = ANY($1::text[])
+       ORDER BY ca.aggregate_id, c.name`,
+      [aggregateIds],
+    );
+    for (const r of membRes.rows) {
+      if (!memberMap.has(r.aggregate_id)) memberMap.set(r.aggregate_id, []);
+      memberMap.get(r.aggregate_id)!.push(r.member_name);
+    }
+  }
+
+  return res.rows.map(r => ({
+    id:          r.id,
+    name:        r.name,
+    roleType:    r.role_type,
+    gender:      r.gender,
+    biography:   r.biography,
+    isAggregate: r.is_aggregate,
+    members:     memberMap.get(r.id) ?? [],
+    blockCount:  parseInt(r.block_count, 10),
+  }));
+}
