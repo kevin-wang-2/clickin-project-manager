@@ -79,6 +79,22 @@ function parseContent(msgType: string, rawContent: string): Pick<HistoryMessage,
   try {
     const parsed = JSON.parse(rawContent);
     if (msgType === "text") return { type: "text", text: parsed.text ?? "" };
+    if (msgType === "post") {
+      // Rich text: flatten all paragraph segments into plain text
+      const body = parsed.zh_cn ?? parsed.en_us ?? parsed;
+      const content = body?.content as Array<Array<{ tag: string; text?: string }>> | undefined;
+      if (!Array.isArray(content)) return { type: "text", text: "" };
+      const text = content
+        .map(para =>
+          para
+            .filter(seg => seg.tag === "text" || seg.tag === "a")
+            .map(seg => seg.text ?? "")
+            .join("")
+        )
+        .join("\n")
+        .trim();
+      return { type: "text", text };
+    }
     if (msgType === "interactive") {
       const title =
         parsed.header?.title?.content ??
