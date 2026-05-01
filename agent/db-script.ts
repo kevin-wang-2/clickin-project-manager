@@ -311,12 +311,6 @@ export async function queryBlocks(
 
 // ── Script meta ───────────────────────────────────────────────────────────────
 
-export type PageRangeEntry = {
-  pageNum:    number;
-  firstLine:  number;
-  lastLine:   number;
-  blockCount: number;
-};
 
 export type ScriptMetaResult = {
   productionName:  string;
@@ -327,8 +321,6 @@ export type ScriptMetaResult = {
   totalScenes:     number;
   totalCharacters: number;
   totalPages:      number;
-  pageRanges:      PageRangeEntry[];   // per-page line ranges
-  lineToPage:      Record<number, number>; // line_num → page_num
 };
 
 export async function getScriptMeta(productionId: string): Promise<ScriptMetaResult | null> {
@@ -359,63 +351,17 @@ export async function getScriptMeta(productionId: string): Promise<ScriptMetaRes
   const totalScenes = parseInt(pr.scene_count, 10);
   const totalChars  = parseInt(pr.char_count, 10);
 
-  // Resolve page map (from stored cache or on-demand)
-  let rawMap: Record<string, number> = {};
+  // Count total pages from cached page map
   const stored = pr.page_map;
-  if (stored && stored[layout] && Object.keys(stored[layout]).length > 0) {
-    rawMap = stored[layout];
-  } else {
-    rawMap = await getPageMapForProduction(productionId, layout);
-  }
-
-  if (Object.keys(rawMap).length === 0) {
-    return {
-      productionName: pr.name, pageLayout: layout, stageDelimOpen: delimOpen,
-      stageDelimClose: delimClose, totalBlocks, totalScenes, totalCharacters: totalChars,
-      totalPages: 0, pageRanges: [], lineToPage: {},
-    };
-  }
-
-  // Join page map with line numbers via a single SQL query
-  const joinRes = await pool.query<{ line_num: string; page_num: string }>(
-    `WITH blocks_ordered AS (
-       SELECT id, ROW_NUMBER() OVER (ORDER BY sort_key) AS line_num
-       FROM script WHERE production_id = $1
-     ),
-     page_entries AS (
-       SELECT key AS block_id, value::int AS page_num
-       FROM jsonb_each_text($2::jsonb)
-     )
-     SELECT bo.line_num::text, pe.page_num::text
-     FROM page_entries pe
-     JOIN blocks_ordered bo ON bo.id = pe.block_id
-     ORDER BY bo.line_num`,
-    [productionId, JSON.stringify(rawMap)],
-  );
-
-  const lineToPage: Record<number, number> = {};
-  const pageAgg = new Map<number, { first: number; last: number; count: number }>();
-
-  for (const r of joinRes.rows) {
-    const ln = parseInt(r.line_num, 10);
-    const pn = parseInt(r.page_num, 10);
-    lineToPage[ln] = pn;
-    const agg = pageAgg.get(pn);
-    if (!agg) pageAgg.set(pn, { first: ln, last: ln, count: 1 });
-    else { agg.last = Math.max(agg.last, ln); agg.count++; }
-  }
-
-  const pageRanges: PageRangeEntry[] = Array.from(pageAgg.entries())
-    .sort((a, b) => a[0] - b[0])
-    .map(([pageNum, { first, last, count }]) => ({
-      pageNum, firstLine: first, lastLine: last, blockCount: count,
-    }));
+  const rawMap: Record<string, number> = (stored && stored[layout]) ? stored[layout] : {};
+  const totalPages = Object.keys(rawMap).length > 0
+    ? Math.max(...Object.values(rawMap))
+    : 0;
 
   return {
     productionName: pr.name, pageLayout: layout, stageDelimOpen: delimOpen,
     stageDelimClose: delimClose, totalBlocks, totalScenes, totalCharacters: totalChars,
-    totalPages: pageRanges.length > 0 ? pageRanges[pageRanges.length - 1].pageNum : 0,
-    pageRanges, lineToPage,
+    totalPages,
   };
 }
 
