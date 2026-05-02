@@ -2456,6 +2456,7 @@ export default function ScriptEditor({
   const [blocks, setBlocks] = useState<Block[]>([makeBlock()]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const focusedIdRef = useRef<string | null>(null);
+  const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
   const [charEditTokens, setCharEditTokens] = useState<Record<string, number>>({});
 
   // ── Block tags ───────────────────────────────────────────────────────────────
@@ -2838,7 +2839,7 @@ export default function ScriptEditor({
       const [fragment, query] = hash.slice(1).split("?");
       const blockId = fragment.slice("block-".length);
       const idx = blocksRef.current.findIndex(b => b.id === blockId);
-      if (idx >= 0) scrollToBlockIdx(idx, "center");
+      if (idx >= 0) { scrollToBlockIdx(idx, "center"); setHighlightedBlockId(blockId); }
       if (new URLSearchParams(query).get("open_comment") === "true") {
         setActiveCommentBlockId(blockId);
       }
@@ -2855,6 +2856,21 @@ export default function ScriptEditor({
       } catch { /* ignore */ }
     }
   }, [loadState, productionId, scrollToBlockIdx]);
+
+  // ── Clear block highlight on scroll or click ─────────────────────────────────
+  useEffect(() => {
+    if (!highlightedBlockId) return;
+    const clear = () => setHighlightedBlockId(null);
+    const timer = setTimeout(() => {
+      document.addEventListener("scroll", clear, { passive: true, capture: true });
+      document.addEventListener("click", clear);
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("scroll", clear, { capture: true });
+      document.removeEventListener("click", clear);
+    };
+  }, [highlightedBlockId]);
 
   // ── Save scroll position to cookie (debounced) ───────────────────────────────
   const posSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -3927,7 +3943,7 @@ export default function ScriptEditor({
                 id={`block-${block.id}`}
                 data-bwrap={block.id}
                 data-scene-anchor={sceneStart ? block.sceneId : undefined}
-                className={`min-w-0 scroll-mt-20`}
+                className={`min-w-0 scroll-mt-20 transition-[outline] duration-150${highlightedBlockId === block.id ? " outline outline-2 outline-amber-400 rounded-lg" : ""}`}
               >
                 {/* Scene anchor for TableOfContents links */}
                 {sceneStart && <span id={`scene-block-${block.sceneId}`} className="pointer-events-none absolute" />}

@@ -671,10 +671,12 @@ function BlockText({
 // ─── Cue chip ─────────────────────────────────────────────────────────────────
 
 function CueChip({
-  cue, colorIdx, selected, warning, editable, presenceUsers, onSelect, onCommitNumber, onCommitName, onDragStart,
+  cue, colorIdx, selected, warning, editable, presenceUsers, highlighted,
+  onSelect, onCommitNumber, onCommitName, onDragStart,
 }: {
   cue: Cue; colorIdx: number; selected: boolean; warning: boolean; editable: boolean;
   presenceUsers: CuePresence[];
+  highlighted?: boolean;
   onSelect: () => void;
   onCommitNumber: (v: string) => void;
   onCommitName: (v: string) => void;
@@ -688,7 +690,8 @@ function CueChip({
       onClick={e => { e.stopPropagation(); if (!selected) onSelect(); }}
       className={`flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-mono cursor-pointer transition-all select-none
         ${selected ? `${c.bg} text-white ring-2 ring-offset-1 ring-white/50 shadow` : `${c.light} ${c.text} whitespace-nowrap hover:ring-1 hover:ring-current/30`}
-        ${warning ? "ring-1 ring-amber-400" : ""}`}
+        ${warning ? "ring-1 ring-amber-400" : ""}
+        ${highlighted && !selected ? "ring-2 ring-amber-400 ring-offset-1 shadow-sm shadow-amber-200" : ""}`}
       title={warning ? "⚠ 位置可能已偏移，请检查" : undefined}
     >
       {onDragStart && (
@@ -915,6 +918,7 @@ export default function CuePage({
   );
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [savingCueId, setSavingCueId] = useState<string | null>(null);
+  const [highlightedCueId, setHighlightedCueId] = useState<string | null>(null);
 
   // ── Cookie: restore cue view state once on mount ──────────────────────────
   const cueStateRestoredRef = useRef(false);
@@ -1584,8 +1588,25 @@ export default function CuePage({
     const blockId = cue.start.kind === "block" ? cue.start.blockId : cue.start.afterBlockId;
     const idx = blocks.findIndex(b => b.id === blockId);
     if (idx >= 0) scrollToBlockIdx(idx, "center");
+    setHighlightedCueId(cueIdParam);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollToBlockIdx]);
+
+  // ── Clear cue highlight on scroll or click ───────────────────────────────
+  useEffect(() => {
+    if (!highlightedCueId) return;
+    const clear = () => setHighlightedCueId(null);
+    const container = scrollContainerRef.current;
+    const timer = setTimeout(() => {
+      if (container) container.addEventListener("scroll", clear, { passive: true });
+      document.addEventListener("click", clear);
+    }, 400);
+    return () => {
+      clearTimeout(timer);
+      if (container) container.removeEventListener("scroll", clear);
+      document.removeEventListener("click", clear);
+    };
+  }, [highlightedCueId]);
 
   // ── Cookie: save scroll position (debounced) ─────────────────────────────
   const posSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2050,6 +2071,7 @@ export default function CuePage({
                           onSelect={() => setSelection({ kind: "cue", cueId: cue.id })}
                           onCommitNumber={v => updateCueField(cue, { number: v })}
                           onCommitName={v => updateCueField(cue, { name: v })}
+                          highlighted={highlightedCueId === cue.id}
                           onDragStart={canEditCue(cue) ? (e) => startCueDrag(e, cue.id, "move") : undefined}
                         />
                       ))}
@@ -2116,6 +2138,7 @@ export default function CuePage({
                           onSelect={() => setSelection({ kind: "cue", cueId: cue.id })}
                           onCommitNumber={v => updateCueField(cue, { number: v })}
                           onCommitName={v => updateCueField(cue, { name: v })}
+                          highlighted={highlightedCueId === cue.id}
                           onDragStart={canEditCue(cue) ? (e) => startCueDrag(e, cue.id, "move") : undefined}
                         />
                       ))

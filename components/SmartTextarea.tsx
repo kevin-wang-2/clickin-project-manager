@@ -107,6 +107,24 @@ export function scriptRefDropPlugin(productionId: string): DropPlugin {
 // Script mention — adds href and title attrs on top of standard Mention attrs
 const ScriptMentionExt = Mention.extend({
   name: "scriptMention",
+  addKeyboardShortcuts() {
+    return {
+      Backspace: () =>
+        this.editor.commands.command(({ tr, state }) => {
+          let handled = false;
+          const { selection } = state;
+          if (!selection.empty) return false;
+          state.doc.nodesBetween(selection.anchor - 1, selection.anchor, (node, pos) => {
+            if (node.type.name === this.name) {
+              handled = true;
+              tr.insertText("#", pos, pos + node.nodeSize);
+              return false;
+            }
+          });
+          return handled;
+        }),
+    };
+  },
   addAttributes() {
     return {
       ...this.parent?.(),
