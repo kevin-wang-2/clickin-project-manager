@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
+import SmartTextarea, { scriptRefDropPlugin } from "@/components/SmartTextarea";
+import SmartText, { scriptRefTextPlugin } from "@/components/SmartText";
 import type { EventTechReq, EventScheduleItem, ProductionEvent } from "@/lib/event-db";
 import { fmtTime, fmtDateTime } from "@/lib/tz";
 
@@ -305,7 +307,7 @@ export default function ReqDetailClient({
                         </p>
                       )}
                       {item.notes && (
-                        <p className="text-xs text-zinc-400 mt-0.5 truncate">{item.notes}</p>
+                        <SmartText content={item.notes} plugins={[scriptRefTextPlugin]} className="text-xs text-zinc-400 mt-0.5 truncate" />
                       )}
                     </div>
                   </div>
@@ -345,9 +347,10 @@ export default function ReqDetailClient({
               </div>
               <div>
                 <label className="block text-xs text-zinc-500 mb-1">详情</label>
-                <textarea
+                <SmartTextarea
                   value={description}
-                  onChange={e => setDescription(e.target.value)}
+                  onChange={setDescription}
+                  plugins={[scriptRefDropPlugin(productionId)]}
                   rows={4}
                   className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-800 focus:outline-none focus:border-zinc-400 resize-none"
                   placeholder="需求详情（可选）"
@@ -407,7 +410,7 @@ export default function ReqDetailClient({
               {req.description && (
                 <div>
                   <p className="text-xs text-zinc-400 mb-1">详情</p>
-                  <p className="text-sm text-zinc-600 whitespace-pre-wrap">{req.description}</p>
+                  <SmartText content={req.description} plugins={[scriptRefTextPlugin]} className="text-zinc-600" />
                 </div>
               )}
               {req.assignees.length > 0 && (

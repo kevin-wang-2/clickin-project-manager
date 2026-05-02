@@ -46,7 +46,10 @@ const TECH_STATUS_COLORS: Record<string, string> = {
 
 import { isoToDatetimeLocal, isoToDateInput, isoToTimeInput, datetimeLocalToIso, dateTimeToIso, fmtDateTime as fmt, fmtTime, fmtDateLong } from "@/lib/tz";
 import MarkdownEditor from "@/components/MarkdownEditor";
+import MarkdownView from "@/components/MarkdownView";
 import MentionTextarea, { type MentionMember } from "@/components/MentionTextarea";
+import SmartTextarea, { scriptRefDropPlugin, memberDropPlugin } from "@/components/SmartTextarea";
+import SmartText, { scriptRefTextPlugin, memberTextPlugin } from "@/components/SmartText";
 
 function toLocalInput(iso: string | null)     { return isoToDatetimeLocal(iso); }
 function toLocalDate(iso: string | null)       { return isoToDateInput(iso); }
@@ -186,7 +189,8 @@ function InfoTab({
         )}
         <div>
           <label className="block text-xs text-zinc-500 mb-1">备注</label>
-          <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3}
+          <SmartTextarea value={description} onChange={setDescription} rows={3}
+            plugins={[scriptRefDropPlugin(productionId)]}
             className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
         </div>
         {showSM && (
@@ -274,7 +278,7 @@ function InfoTab({
         {event.description && (
           <div className="col-span-2">
             <dt className="text-xs text-zinc-400 mb-0.5">备注</dt>
-            <dd className="text-zinc-700 whitespace-pre-wrap">{event.description}</dd>
+            <dd className="text-zinc-700"><SmartText content={event.description} plugins={[scriptRefTextPlugin]} /></dd>
           </div>
         )}
         {SM_EVENT_TYPES.has(event.eventType) && (
@@ -808,7 +812,8 @@ function ScheduleItemRow({
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
             </>
           )}
-          <textarea placeholder="备注" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+          <SmartTextarea placeholder="备注" value={notes} onChange={setNotes} rows={2}
+            plugins={[scriptRefDropPlugin(productionId)]}
             className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
         </div>
 
@@ -1077,7 +1082,8 @@ function ScheduleItemModal({
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
             </>
           )}
-          <textarea placeholder="备注" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+          <SmartTextarea placeholder="备注" value={notes} onChange={setNotes} rows={2}
+            plugins={[scriptRefDropPlugin(productionId)]}
             className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
         </div>
 
@@ -1433,7 +1439,7 @@ function ScheduleTableView({
                 </span>
               )}
               {!cell.isBreak && cell.item.notes && (
-                <span className="opacity-60 w-full mt-0.5 break-words italic">{cell.item.notes}</span>
+                <span className="opacity-60 w-full mt-0.5 italic"><SmartText content={cell.item.notes} plugins={[scriptRefTextPlugin]} /></span>
               )}
             </div>
           );
@@ -1575,6 +1581,7 @@ function CallTimeTab({
                   suggestedCallAt={suggested}
                   canEdit={canEdit}
                   singleDay={singleDay} eventDate={eventDate}
+                  productionId={productionId}
                   onSave={(callAt, notes) => saveCallTime(person.openId, person.name, callAt, notes)}
                   onDelete={() => deleteCallTime(person.openId)}
                 />
@@ -1588,13 +1595,14 @@ function CallTimeTab({
 }
 
 function PersonCallTimeRow({
-  person, callTime, suggestedCallAt, canEdit, singleDay, eventDate, onSave, onDelete,
+  person, callTime, suggestedCallAt, canEdit, singleDay, eventDate, productionId, onSave, onDelete,
 }: {
   person: { openId: string; name: string };
   callTime: EventCallTime | null;
   suggestedCallAt: string | null;
   canEdit: boolean;
   singleDay: boolean; eventDate: string;
+  productionId: string;
   onSave: (callAt: string, notes: string) => void;
   onDelete: () => void;
 }) {
@@ -1645,10 +1653,11 @@ function PersonCallTimeRow({
             <button onClick={() => { onDelete(); setEditing(false); }} className="text-xs text-red-400">删除</button>
           )}
         </div>
-        <textarea
+        <SmartTextarea
           placeholder="备注（可选）"
-          value={notes} onChange={e => setNotes(e.target.value)}
+          value={notes} onChange={setNotes}
           rows={2}
+          plugins={[scriptRefDropPlugin(productionId)]}
           className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none w-full"
         />
         {editIsLate && suggestedLocal && (
@@ -1669,7 +1678,7 @@ function PersonCallTimeRow({
             {fmtTime(callTime.callAt)}
           </span>
           {isLate && <span className="text-xs text-amber-500">⚠ 偏晚</span>}
-          {callTime.notes && <span className="text-xs text-zinc-400">{callTime.notes}</span>}
+          {callTime.notes && <span className="text-xs text-zinc-400"><SmartText content={callTime.notes} plugins={[scriptRefTextPlugin]} /></span>}
           {canEdit && <button onClick={startEdit} className="text-xs text-zinc-400 hover:text-zinc-600">编辑</button>}
         </>
       ) : (
@@ -1732,6 +1741,7 @@ function TechReqCard({
   req, expanded, onToggleExpand,
   canEditThisReq, isEventClosed,
   scheduleItems, deptMembers, allMembers, base,
+  productionId,
   onUpdate, onDelete, canDelete,
 }: {
   req: EventTechReq;
@@ -1743,6 +1753,7 @@ function TechReqCard({
   deptMembers: MemberWithRoles[];
   allMembers?: MemberWithRoles[];
   base: string;
+  productionId: string;
   onUpdate: (req: EventTechReq) => void;
   onDelete: (id: string) => void;
   canDelete: boolean;
@@ -1821,8 +1832,9 @@ function TechReqCard({
             <>
               <input value={editTitle} onChange={e => setEditTitle(e.target.value)}
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 mt-2" />
-              <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows={2}
+              <SmartTextarea value={editDesc} onChange={setEditDesc} rows={2}
                 placeholder="描述（可选）"
+                plugins={[scriptRefDropPlugin(productionId)]}
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
               <div className="flex items-center gap-2">
                 <span className="text-xs text-zinc-400 shrink-0">提前分钟</span>
@@ -1839,7 +1851,7 @@ function TechReqCard({
             </>
           ) : (
             <>
-              {req.description && <p className="text-sm text-zinc-600 pt-2">{req.description}</p>}
+              {req.description && <p className="text-sm text-zinc-600 pt-2"><SmartText content={req.description} plugins={[scriptRefTextPlugin]} /></p>}
               {req.presetMinutes != null && (
                 <p className="text-xs text-zinc-400">提前 {req.presetMinutes} 分钟准备</p>
               )}
@@ -1978,6 +1990,7 @@ function TechReqTab({
         deptMembers={deptMembers(req.departmentId)}
         allMembers={req.departmentId ? members : undefined}
         base={base}
+        productionId={productionId}
         onUpdate={handleUpdate}
         onDelete={deleteReq}
         canDelete={canDelete}
@@ -2016,7 +2029,7 @@ function TechReqTab({
             <div className="grid grid-cols-2 gap-2">
               <input placeholder="需求标题 *" value={newTitle} onChange={e => setNewTitle(e.target.value)}
                 className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400" />
-              <textarea placeholder="描述" value={newDesc} onChange={e => setNewDesc(e.target.value)} rows={2}
+              <SmartTextarea value={newDesc} onChange={setNewDesc} plugins={[scriptRefDropPlugin(productionId)]} rows={2} placeholder="描述"
                 className="col-span-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none" />
               <select value={newDeptId} onChange={e => {
                   const next = e.target.value;
@@ -2399,7 +2412,8 @@ function ReportEditor({
             onChange={setBody}
             onMentionsChange={setMentions}
             members={members}
-            placeholder="写报告正文… 输入 @ 可提及成员"
+            productionId={productionId}
+            placeholder="写报告正文… 输入 @ 可提及成员，# 可引用剧本位置"
             minHeight={200}
           />
           <div className="flex gap-2 flex-wrap items-center">
@@ -2423,7 +2437,7 @@ function ReportEditor({
       ) : (
         <div className="flex flex-col gap-2">
           {report.body
-            ? <p className="text-sm text-zinc-700 whitespace-pre-wrap leading-relaxed">{report.body}</p>
+            ? <MarkdownView content={report.body} />
             : <p className="text-xs text-zinc-300">暂无正文</p>
           }
           {canWrite && !isPublished && (
@@ -2548,12 +2562,10 @@ function DeptNotesList({
             </div>
             {editingId === note.id ? (
               <div className="flex flex-col gap-1.5">
-                <MentionTextarea
+                <SmartTextarea
                   value={editDraft}
                   onChange={setEditDraft}
-                  mentions={editMentions}
-                  onMentionsChange={setEditMentions}
-                  members={members}
+                  plugins={[memberDropPlugin(members, { onPick: m => setEditMentions(prev => [...prev.filter(x => x.openId !== m.openId), m]) }), scriptRefDropPlugin(productionId)]}
                   rows={2}
                   placeholder="写 note…"
                   className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm focus:outline-none resize-none"
@@ -2562,7 +2574,7 @@ function DeptNotesList({
                   className="self-start px-2 py-1 text-xs rounded-lg bg-zinc-800 text-white">保存</button>
               </div>
             ) : (
-              <p className="text-sm text-zinc-700">{note.content}</p>
+              <SmartText content={note.content} plugins={[memberTextPlugin(note.mentions ?? []), scriptRefTextPlugin]} />
             )}
           </div>
         );
@@ -2577,12 +2589,10 @@ function DeptNotesList({
             <button onClick={addNote}
               className="ml-auto px-3 py-1.5 rounded-lg bg-zinc-800 text-white text-xs font-medium shrink-0">添加</button>
           </div>
-          <MentionTextarea
+          <SmartTextarea
             value={newContent}
             onChange={setNewContent}
-            mentions={newMentions}
-            onMentionsChange={setNewMentions}
-            members={members}
+            plugins={[memberDropPlugin(members, { onPick: m => setNewMentions(prev => [...prev.filter(x => x.openId !== m.openId), m]) }), scriptRefDropPlugin(productionId)]}
             rows={2}
             placeholder="写 note… 输入 @ 可提及成员"
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); } }}

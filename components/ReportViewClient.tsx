@@ -4,8 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import { fmtDateTime as fmtDate } from "@/lib/tz";
-import Markdown from "./Markdown";
-import MentionTextarea, { type MentionMember } from "./MentionTextarea";
+import { type MentionMember } from "./MentionTextarea";
+import MarkdownView from "./MarkdownView";
+import SmartTextarea, { memberDropPlugin, scriptRefDropPlugin } from "./SmartTextarea";
+import SmartText, { memberTextPlugin, scriptRefTextPlugin } from "./SmartText";
 import type { ProductionEvent, EventReport, EventReportNote, EventDepartment, ReportReply } from "@/lib/event-db";
 
 const REPORT_TYPE_LABELS: Record<string, string> = {
@@ -33,13 +35,14 @@ type Props = {
 // ─── NoteCard ─────────────────────────────────────────────────────────────────
 
 function NoteCard({
-  note, dept, noteNum, canEdit, members, onSave, onDelete,
+  note, dept, noteNum, canEdit, members, productionId, onSave, onDelete,
 }: {
   note: EventReportNote;
   dept: string | undefined;
   noteNum: number;
   canEdit: boolean;
   members: MentionMember[];
+  productionId: string;
   onSave: (content: string, mentions: MentionMember[]) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
@@ -85,14 +88,15 @@ function NoteCard({
       </div>
       {editing ? (
         <div className="flex flex-col gap-2">
-          <MentionTextarea
+          <SmartTextarea
             value={draft}
             onChange={setDraft}
-            mentions={draftMentions}
-            onMentionsChange={setDraftMentions}
-            members={members}
+            plugins={[
+              memberDropPlugin(members, { onPick: (m) => setDraftMentions(prev => [...prev.filter(x => x.openId !== m.openId), m]) }),
+              scriptRefDropPlugin(productionId),
+            ]}
             rows={3}
-            placeholder="写 note… 输入 @ 可提及成员"
+            placeholder="写 note… 输入 @ 可提及成员，# 可引用剧本位置"
             className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none"
           />
           <button onClick={save} disabled={saving || !draft.trim()}
@@ -101,7 +105,7 @@ function NoteCard({
           </button>
         </div>
       ) : (
-        <Markdown content={note.content} size="sm" />
+        <SmartText content={note.content} plugins={[memberTextPlugin(note.mentions), scriptRefTextPlugin]} />
       )}
     </div>
   );
@@ -125,7 +129,7 @@ function collectThread(
 
 function ReplyThread({
   parentType, parentId, parentLabel, parentAuthor,
-  allReplies, canAdd, canModerate, currentUserOpenId, replyBase, onRepliesChange, members,
+  allReplies, canAdd, canModerate, currentUserOpenId, replyBase, onRepliesChange, members, productionId,
 }: {
   parentType: "report" | "note" | "reply";
   parentId: string;
@@ -138,6 +142,7 @@ function ReplyThread({
   replyBase: string;
   onRepliesChange: (updater: (prev: ReportReply[]) => ReportReply[]) => void;
   members: MentionMember[];
+  productionId: string;
 }) {
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [addingTop, setAddingTop] = useState(false);
@@ -205,7 +210,7 @@ function ReplyThread({
                   )}
                 </div>
               </div>
-              <Markdown content={reply.content} size="sm" />
+              <SmartText content={reply.content} plugins={[memberTextPlugin(reply.mentions ?? []), scriptRefTextPlugin]} />
             </div>
 
             {isReplying && (
@@ -215,6 +220,7 @@ function ReplyThread({
                 onSend={(content, mentions) => sendReply("reply", reply.id, content, mentions)}
                 onCancel={() => setReplyingToId(null)}
                 members={members}
+                productionId={productionId}
               />
             )}
           </div>
@@ -229,6 +235,7 @@ function ReplyThread({
             onSend={(content, mentions) => sendReply(parentType, parentId, content, mentions)}
             onCancel={() => setAddingTop(false)}
             members={members}
+            productionId={productionId}
           />
         ) : (
           <button onClick={() => setAddingTop(true)}
@@ -242,13 +249,14 @@ function ReplyThread({
 }
 
 function ReplyForm({
-  placeholder, initialMentions = [], onSend, onCancel, members,
+  placeholder, initialMentions = [], onSend, onCancel, members, productionId,
 }: {
   placeholder: string;
   initialMentions?: MentionMember[];
   onSend: (content: string, mentions: MentionMember[]) => Promise<void>;
   onCancel: () => void;
   members: MentionMember[];
+  productionId: string;
 }) {
   const initText = initialMentions.length > 0
     ? initialMentions.map(m => `@${m.name} `).join("") : "";
@@ -265,12 +273,13 @@ function ReplyForm({
 
   return (
     <div className="flex flex-col gap-2 pt-1">
-      <MentionTextarea
+      <SmartTextarea
         value={content}
         onChange={setContent}
-        mentions={mentions}
-        onMentionsChange={setMentions}
-        members={members}
+        plugins={[
+          memberDropPlugin(members, { onPick: (m) => setMentions(prev => [...prev.filter(x => x.openId !== m.openId), m]) }),
+          scriptRefDropPlugin(productionId),
+        ]}
         rows={2}
         placeholder={placeholder}
         autoFocus
@@ -352,7 +361,7 @@ export default function ReportViewClient({
     return canReply && memberDeptIds.includes(note.departmentId);
   }
 
-  const commonThreadProps = { canModerate: canModerateNotes, currentUserOpenId, replyBase, onRepliesChange: setReplies, members };
+  const commonThreadProps = { canModerate: canModerateNotes, currentUserOpenId, replyBase, onRepliesChange: setReplies, members, productionId };
 
   return (
     <div className="min-h-screen bg-zinc-100">
@@ -384,7 +393,7 @@ export default function ReportViewClient({
         <section className="mb-6">
           {report.body ? (
             <div className="bg-white rounded-2xl shadow-sm px-5 py-4">
-              <Markdown content={report.body} />
+              <MarkdownView content={report.body} />
             </div>
           ) : (
             <p className="text-center text-sm text-zinc-300">暂无正文</p>
@@ -413,7 +422,7 @@ export default function ReportViewClient({
                   <div key={note.id}>
                     <NoteCard
                       note={note} dept={undefined} noteNum={i + 1}
-                      members={members}
+                      members={members} productionId={productionId}
                       canEdit={!isPublished && (canModerateNotes || note.authorOpenId === currentUserOpenId)}
                       onSave={(content, mentions) => saveNote(note.id, content, mentions)}
                       onDelete={() => deleteNote(note.id)}
@@ -434,7 +443,7 @@ export default function ReportViewClient({
             <div key={note.id} className="mb-3">
               <NoteCard
                 note={note} dept={deptMap.get(note.departmentId)} noteNum={i + 1}
-                members={members}
+                members={members} productionId={productionId}
                 canEdit={!isPublished && (canModerateNotes || note.authorOpenId === currentUserOpenId)}
                 onSave={(content, mentions) => saveNote(note.id, content, mentions)}
                 onDelete={() => deleteNote(note.id)}
@@ -455,14 +464,15 @@ export default function ReportViewClient({
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400">
                 {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
-              <MentionTextarea
+              <SmartTextarea
                 value={newContent}
                 onChange={setNewContent}
-                mentions={newMentions}
-                onMentionsChange={setNewMentions}
-                members={members}
+                plugins={[
+                  memberDropPlugin(members, { onPick: (m) => setNewMentions(prev => [...prev.filter(x => x.openId !== m.openId), m]) }),
+                  scriptRefDropPlugin(productionId),
+                ]}
                 rows={3}
-                placeholder="写 note… 输入 @ 可提及成员"
+                placeholder="写 note… 输入 @ 可提及成员，# 可引用剧本位置"
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:border-zinc-400 resize-none w-full"
               />
               <button onClick={addNote} disabled={adding || !newContent.trim()}

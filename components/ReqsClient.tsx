@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BASE_PATH } from "@/lib/base-path";
 import type { ProductionEvent, EventTechReq, EventDepartment } from "@/lib/event-db";
+import SmartText, { scriptRefTextPlugin } from "@/components/SmartText";
 
 const STATUS_OPTIONS = [
   { value: "pending",     label: "待处理" },
@@ -133,7 +134,7 @@ function ReqCard({
       </div>
 
       {req.description && (
-        <p className="text-xs text-zinc-500 mb-2 whitespace-pre-wrap">{req.description}</p>
+        <SmartText content={req.description} plugins={[scriptRefTextPlugin]} className="text-xs text-zinc-500 mb-2" />
       )}
 
       {req.assignees.length > 0 && (

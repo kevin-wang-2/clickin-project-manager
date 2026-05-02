@@ -163,7 +163,7 @@ function SceneEditRow({
         <td className="px-4 py-3">
           {marks.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {marks.map((m) => (
+              {[...new Set(marks)].map((m) => (
                 <span key={m} className="rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-zinc-400 bg-zinc-100">
                   {m}
                 </span>
