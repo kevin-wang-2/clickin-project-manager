@@ -11,7 +11,6 @@ import {
 import { hasPermission } from "@/lib/roles";
 import { canEditCueList } from "@/lib/cue-list-types";
 import { computePageMap } from "@/lib/script-page";
-import { Suspense } from "react";
 import CuePage from "@/components/CuePage";
 
 export default async function CuesPage({
@@ -51,20 +50,18 @@ export default async function CuesPage({
   const pageMap: Record<string, number> = computePageMap(production.state.blocks, pageLayout);
 
   return (
-    <Suspense>
-      <CuePage
-        productionId={id}
-        productionName={name}
-        blocks={production.state.blocks}
-        characters={production.state.characters}
-        scenes={production.state.scenes}
-        cueLists={cueLists}
-        initialCues={allCues}
-        editableListIds={[...editableListIds]}
-        myOpenId={session.openId}
-        isAdmin={session.isAdmin}
-        pageMap={pageMap}
-      />
-    </Suspense>
+    <CuePage
+      productionId={id}
+      productionName={name}
+      blocks={production.state.blocks}
+      characters={production.state.characters}
+      scenes={production.state.scenes}
+      cueLists={cueLists}
+      initialCues={allCues}
+      editableListIds={[...editableListIds]}
+      myOpenId={session.openId}
+      isAdmin={session.isAdmin}
+      pageMap={pageMap}
+    />
   );
 }

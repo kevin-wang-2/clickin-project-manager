@@ -242,7 +242,7 @@ export default function SmartTextarea({
     onUpdate(props: SuggestionProps<DropItem>) {
       setDrop((prev) =>
         prev
-          ? { ...prev, items: props.items as DropItem[], clientRect: props.clientRect ?? null }
+          ? { ...prev, items: props.items as DropItem[], clientRect: props.clientRect ?? null, command: props.command }
           : null,
       );
     },
