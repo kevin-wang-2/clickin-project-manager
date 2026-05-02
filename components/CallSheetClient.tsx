@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
+import SmartText, { scriptRefTextPlugin } from "@/components/SmartText";
 import { fmtDateTime, fmtTime as fmtTimeTz } from "@/lib/tz";
 import type {
   ProductionEvent,
@@ -99,7 +100,7 @@ export default function CallSheetClient({
                         <p className="text-[11px] text-zinc-400 mt-0.5">{item.location}</p>
                       )}
                       {item.notes && (
-                        <p className="text-[11px] text-zinc-400 mt-0.5 italic">{item.notes}</p>
+                        <SmartText content={item.notes} plugins={[scriptRefTextPlugin]} className="text-[11px] text-zinc-400 mt-0.5 italic" />
                       )}
                     </div>
                     {(item.startTime || item.endTime) && (
@@ -144,7 +145,7 @@ export default function CallSheetClient({
                       <span className="ml-2 text-[11px] text-zinc-400">{deptMap.get(ct.departmentId)}</span>
                     )}
                     {ct.notes && (
-                      <p className="text-[11px] text-zinc-400 mt-0.5">{ct.notes}</p>
+                      <SmartText content={ct.notes} plugins={[scriptRefTextPlugin]} className="text-[11px] text-zinc-400 mt-0.5" />
                     )}
                   </div>
                 </div>
