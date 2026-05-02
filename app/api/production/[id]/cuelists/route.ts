@@ -32,8 +32,10 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   if (!hasPermission("cue:create", session.isAdmin, memberRoles, overrides))
     return Response.json({ error: "权限不足" }, { status: 403 });
 
-  const body = await req.json() as { name: string; notes?: string; template?: string };
+  const body = await req.json() as { name: string; notes?: string; template?: string; abbr?: string };
   if (!body.name?.trim()) return Response.json({ error: "名称不能为空" }, { status: 400 });
+
+  const abbr = body.abbr?.trim().toUpperCase() || null;
 
   let defaultEditRoles: string[] = [];
   if (body.template) {
@@ -47,15 +49,22 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
     defaultEditRoles = tpl.defaultEditRoles;
   }
 
-  await createCueList({
-    id: uid(),
-    productionId: id,
-    name: body.name.trim(),
-    notes: body.notes?.trim() ?? "",
-    template: body.template ?? null,
-    defaultEditRoles,
-    createdBy: session.openId,
-  });
+  try {
+    await createCueList({
+      id: uid(),
+      productionId: id,
+      name: body.name.trim(),
+      notes: body.notes?.trim() ?? "",
+      abbr,
+      template: body.template ?? null,
+      defaultEditRoles,
+      createdBy: session.openId,
+    });
+  } catch (e: unknown) {
+    if ((e as { constraint?: string }).constraint === "cue_list_abbr_production_unique")
+      return Response.json({ error: "简称已被同项目其他Cue表使用" }, { status: 409 });
+    throw e;
+  }
 
   const lists = await listCueLists(id);
   return Response.json(lists, { status: 201 });

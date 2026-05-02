@@ -75,11 +75,23 @@ export const CUE_CREATE_ROLES = new Set([
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export const TEMPLATE_ABBR_HINTS: Record<string, string> = {
+  "灯光": "LQ",
+  "追光": "FQ",
+  "音效": "SQ",
+  "音乐": "MQ",
+  "多媒体": "VQ",
+  "舞台机械": "AQ",
+  "催场": "CQ",
+  "预设": "PQ",
+};
+
 export type CueList = {
   id: string;
   productionId: string;
   name: string;
   notes: string;
+  abbr: string | null;
   template: string | null;
   defaultEditRoles: string[];
   createdBy: string;

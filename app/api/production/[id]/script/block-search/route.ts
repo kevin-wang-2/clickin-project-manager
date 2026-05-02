@@ -7,8 +7,9 @@ import { computePageMap } from "@/lib/script-page";
 
 export type ScriptBlockSearchResult = {
   blockId: string;
-  label: string;       // e.g. "p.2", "1-1", "1-1A", "p.1-3", "1-1A-2"
-  description?: string; // scene name, or content preview for block-level results
+  label: string;       // e.g. "p.2", "1-1", "1-1A", "SQ.5"
+  description?: string; // scene name, cue name, or content preview
+  url?: string;         // if set, overrides the default /script#block-{blockId} link
 };
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -295,26 +296,48 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     return Response.json({ results: dedup(results).slice(0, 8) });
   }
 
-  // ─── Mark only: letters, e.g. "A" ────────────────────────────────────────────
-  const markOnly = q.match(/^[A-Za-z]+$/);
-  if (markOnly) {
-    const res = await pool.query<{
-      id: string; rehearsal_mark: string; scene_num: string; scene_name: string
+  // ─── Cue: ABBR.number, e.g. "SQ.5" ──────────────────────────────────────────
+  const cueNumMatch = q.match(/^([A-Za-z]+)\.(.*)$/);
+  if (cueNumMatch) {
+    const [, abbr, numPrefix] = cueNumMatch;
+    const cueRes = await pool.query<{
+      id: string; number: string; name: string; cue_list_id: string; abbr: string;
     }>(
-      `SELECT DISTINCT ON (s.scene_id, s.rehearsal_mark)
-         s.id, s.rehearsal_mark, sc.num AS scene_num, sc.name AS scene_name
-       FROM script s
-       LEFT JOIN scene sc ON sc.id = s.scene_id
-       WHERE s.production_id = $1 AND s.rehearsal_mark ILIKE $2
-       ORDER BY s.scene_id, s.rehearsal_mark, s.sort_key
+      `SELECT c.id, c.number, c.name, cl.id AS cue_list_id, cl.abbr
+       FROM cue c
+       JOIN cue_list cl ON cl.id = c.cue_list_id
+       WHERE cl.production_id = $1 AND cl.abbr ILIKE $2
+         AND ($3 = '' OR c.number ILIKE $4)
+       ORDER BY length(c.number), c.number
        LIMIT 8`,
-      [productionId, `${q}%`]
+      [productionId, abbr, numPrefix, `${numPrefix}%`]
     );
-    for (const r of res.rows) {
+    for (const r of cueRes.rows) {
       results.push({
         blockId: r.id,
-        label: `${r.scene_num}${r.rehearsal_mark}`,
-        description: r.scene_name || undefined,
+        label: `${r.abbr}.${r.number}`,
+        description: r.name || undefined,
+        url: `/production/${productionId}/cues?cueList=${r.cue_list_id}&cueId=${r.id}`,
+      });
+    }
+    return Response.json({ results: dedup(results) });
+  }
+
+  // ─── Cue sheet abbreviation: letters only, e.g. "SQ" ─────────────────────────
+  const abbrMatch = q.match(/^[A-Za-z]+$/);
+  if (abbrMatch) {
+    const clRes = await pool.query<{ id: string; name: string; abbr: string }>(
+      `SELECT id, name, abbr FROM cue_list
+       WHERE production_id = $1 AND abbr ILIKE $2
+       ORDER BY abbr LIMIT 5`,
+      [productionId, `${q}%`]
+    );
+    for (const r of clRes.rows) {
+      results.push({
+        blockId: r.id,
+        label: r.abbr!,
+        description: r.name || undefined,
+        url: `/production/${productionId}/cues?cueList=${r.id}`,
       });
     }
     return Response.json({ results: dedup(results) });

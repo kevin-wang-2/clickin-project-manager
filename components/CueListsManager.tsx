@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { CueList, CueListTemplate } from "@/lib/cue-list-types";
+import { TEMPLATE_ABBR_HINTS } from "@/lib/cue-list-types";
 
 type Props = {
   productionId: string;
@@ -24,11 +25,25 @@ function CreateForm({
   onCreated: (lists: CueList[]) => void;
   onCancel: () => void;
 }) {
+  const initTemplate = availableTemplates[0]?.key ?? "";
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState(availableTemplates[0]?.key ?? "");
+  const [template, setTemplate] = useState(initTemplate);
+  const [abbr, setAbbrState] = useState(TEMPLATE_ABBR_HINTS[initTemplate] ?? "");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  const prevTemplateRef = useRef(initTemplate);
+  useEffect(() => {
+    const prevHint = TEMPLATE_ABBR_HINTS[prevTemplateRef.current] ?? "";
+    const newHint = TEMPLATE_ABBR_HINTS[template] ?? "";
+    if (abbr === "" || abbr === prevHint) setAbbrState(newHint);
+    prevTemplateRef.current = template;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [template]);
+
+  function handleAbbrChange(v: string) { setAbbrState(v.toUpperCase()); }
+  function handleTemplateChange(key: string) { setTemplate(key); }
 
   const submit = async () => {
     if (!name.trim()) { setError("名称不能为空"); return; }
@@ -38,7 +53,12 @@ function CreateForm({
       const res = await fetch(`${BASE_PATH}/api/production/${productionId}/cuelists`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), notes: notes.trim(), template: template || undefined }),
+        body: JSON.stringify({
+          name: name.trim(),
+          notes: notes.trim(),
+          template: template || undefined,
+          abbr: abbr.trim() || undefined,
+        }),
       });
       if (!res.ok) {
         const j = await res.json() as { error?: string };
@@ -76,7 +96,7 @@ function CreateForm({
             {availableTemplates.map((t) => (
               <button
                 key={t.key}
-                onClick={() => setTemplate(t.key)}
+                onClick={() => handleTemplateChange(t.key)}
                 disabled={saving}
                 className={`rounded px-2.5 py-1 text-xs transition-colors disabled:cursor-default ${
                   template === t.key
@@ -88,7 +108,7 @@ function CreateForm({
               </button>
             ))}
             <button
-              onClick={() => setTemplate("")}
+              onClick={() => handleTemplateChange("")}
               disabled={saving}
               className={`rounded px-2.5 py-1 text-xs transition-colors disabled:cursor-default ${
                 template === ""
@@ -101,6 +121,20 @@ function CreateForm({
           </div>
         </div>
       )}
+
+      <div className="space-y-1">
+        <label className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">
+          简称 <span className="font-normal normal-case text-zinc-300">可选 · 同项目唯一</span>
+        </label>
+        <input
+          value={abbr}
+          onChange={(e) => handleAbbrChange(e.target.value)}
+          disabled={saving}
+          placeholder={template ? (TEMPLATE_ABBR_HINTS[template] ?? "如 XQ") : "如 XQ"}
+          maxLength={8}
+          className="w-full rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono outline-none focus:border-zinc-400 disabled:opacity-50 placeholder:text-zinc-300"
+        />
+      </div>
 
       <div className="space-y-1">
         <label className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">备注</label>
@@ -188,7 +222,14 @@ export default function CueListsManager({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-zinc-700 truncate">{cl.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-zinc-700 truncate">{cl.name}</p>
+                      {cl.abbr && (
+                        <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-zinc-500">
+                          {cl.abbr}
+                        </span>
+                      )}
+                    </div>
                     {cl.template && (
                       <p className="text-[10px] text-zinc-400 mt-0.5">{cl.template}</p>
                     )}

@@ -68,7 +68,8 @@ export function scriptRefDropPlugin(productionId: string): DropPlugin {
         );
         const data = await res.json() as { results?: ScriptBlockSearchResult[] };
         return (data.results ?? []).map(r => ({
-          id: r.blockId,
+          // url (cue results) stored in id slot with leading "/"; else blockId
+          id: r.url ?? r.blockId,
           label: r.label,
           secondary: r.description,
         }));
@@ -86,16 +87,18 @@ export function scriptRefDropPlugin(productionId: string): DropPlugin {
         )}
       </span>
     ),
-    format: (item) =>
-      `[#${item.label}](${BASE_PATH}/production/${productionId}/script#block-${item.id}${
-        item.secondary ? ` "${item.secondary.replace(/"/g, "'")}"` : ""
-      })`,
-    toNode: (item) => ({
-      id: item.id,
-      label: item.label,
-      href: `${BASE_PATH}/production/${productionId}/script#block-${item.id}`,
-      title: item.secondary ?? null,
-    }),
+    format: (item) => {
+      const href = item.id.startsWith("/")
+        ? `${BASE_PATH}${item.id}`
+        : `${BASE_PATH}/production/${productionId}/script#block-${item.id}`;
+      return `[#${item.label}](${href}${item.secondary ? ` "${item.secondary.replace(/"/g, "'")}"` : ""})`;
+    },
+    toNode: (item) => {
+      const href = item.id.startsWith("/")
+        ? `${BASE_PATH}${item.id}`
+        : `${BASE_PATH}/production/${productionId}/script#block-${item.id}`;
+      return { id: item.id, label: item.label, href, title: item.secondary ?? null };
+    },
   };
 }
 

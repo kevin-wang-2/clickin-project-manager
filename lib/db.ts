@@ -942,13 +942,22 @@ import type { CueList, CueListPermissionRow } from "./cue-list-types";
 
 type CueListRow = {
   id: string; production_id: string; name: string; notes: string;
-  template: string | null; default_edit_roles: string[];
+  abbr: string | null; template: string | null; default_edit_roles: string[];
   created_by: string; created_by_name: string; created_at: Date;
 };
 
+function rowToCueList(r: CueListRow): CueList {
+  return {
+    id: r.id, productionId: r.production_id, name: r.name, notes: r.notes,
+    abbr: r.abbr, template: r.template, defaultEditRoles: r.default_edit_roles,
+    createdBy: r.created_by, createdByName: r.created_by_name,
+    createdAt: r.created_at.toISOString(),
+  };
+}
+
 export async function listCueLists(productionId: string): Promise<CueList[]> {
   const res = await getPool().query<CueListRow>(
-    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.template,
+    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.abbr, cl.template,
             cl.default_edit_roles, cl.created_by, fu.name AS created_by_name, cl.created_at
      FROM cue_list cl
      JOIN feishu_user fu ON fu.open_id = cl.created_by
@@ -956,28 +965,23 @@ export async function listCueLists(productionId: string): Promise<CueList[]> {
      ORDER BY cl.created_at`,
     [productionId]
   );
-  return res.rows.map(r => ({
-    id: r.id, productionId: r.production_id, name: r.name, notes: r.notes,
-    template: r.template, defaultEditRoles: r.default_edit_roles,
-    createdBy: r.created_by, createdByName: r.created_by_name,
-    createdAt: r.created_at.toISOString(),
-  }));
+  return res.rows.map(rowToCueList);
 }
 
 export async function createCueList(data: {
   id: string; productionId: string; name: string; notes: string;
-  template: string | null; defaultEditRoles: string[]; createdBy: string;
+  abbr: string | null; template: string | null; defaultEditRoles: string[]; createdBy: string;
 }): Promise<void> {
   await getPool().query(
-    `INSERT INTO cue_list (id, production_id, name, notes, template, default_edit_roles, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [data.id, data.productionId, data.name, data.notes, data.template, data.defaultEditRoles, data.createdBy]
+    `INSERT INTO cue_list (id, production_id, name, notes, abbr, template, default_edit_roles, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [data.id, data.productionId, data.name, data.notes, data.abbr, data.template, data.defaultEditRoles, data.createdBy]
   );
 }
 
 export async function getCueList(id: string, productionId: string): Promise<CueList | null> {
   const res = await getPool().query<CueListRow>(
-    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.template,
+    `SELECT cl.id, cl.production_id, cl.name, cl.notes, cl.abbr, cl.template,
             cl.default_edit_roles, cl.created_by, fu.name AS created_by_name, cl.created_at
      FROM cue_list cl
      JOIN feishu_user fu ON fu.open_id = cl.created_by
@@ -985,23 +989,18 @@ export async function getCueList(id: string, productionId: string): Promise<CueL
     [id, productionId]
   );
   if (!res.rows.length) return null;
-  const r = res.rows[0];
-  return {
-    id: r.id, productionId: r.production_id, name: r.name, notes: r.notes,
-    template: r.template, defaultEditRoles: r.default_edit_roles,
-    createdBy: r.created_by, createdByName: r.created_by_name,
-    createdAt: r.created_at.toISOString(),
-  };
+  return rowToCueList(res.rows[0]);
 }
 
 export async function updateCueList(
   id: string, productionId: string,
-  fields: { name?: string; notes?: string }
+  fields: { name?: string; notes?: string; abbr?: string | null }
 ): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [id, productionId];
   if (fields.name  !== undefined) sets.push(`name  = $${vals.push(fields.name)}`);
   if (fields.notes !== undefined) sets.push(`notes = $${vals.push(fields.notes)}`);
+  if ("abbr" in fields) sets.push(`abbr = $${vals.push(fields.abbr ?? null)}`);
   if (!sets.length) return;
   await getPool().query(
     `UPDATE cue_list SET ${sets.join(", ")} WHERE id = $1 AND production_id = $2`,
