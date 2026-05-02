@@ -6,7 +6,6 @@ import React, {
 import { createPortal } from "react-dom";
 import { match as pinyinMatch } from "pinyin-pro";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { BASE_PATH } from "@/lib/base-path";
 import type { Block, Character, Scene } from "@/lib/script-types";
 import type { CueList } from "@/lib/cue-list-types";
@@ -903,7 +902,6 @@ export default function CuePage({
   productionId, productionName, blocks, characters, scenes,
   cueLists, initialCues, editableListIds, myOpenId, isAdmin, pageMap,
 }: Props) {
-  const searchParams = useSearchParams();
   const [cues, setCues] = useState<Cue[]>(initialCues);
   const [copiedCue, setCopiedCue] = useState<Cue | null>(null);
   const [showExport, setShowExport] = useState(false);
@@ -1574,14 +1572,13 @@ export default function CuePage({
   useEffect(() => {
     if (cueNavDoneRef.current) return;
     cueNavDoneRef.current = true;
-    const cueListParam = searchParams.get("cueList");
-    const cueIdParam = searchParams.get("cueId");
+    const sp = new URLSearchParams(window.location.search);
+    const cueListParam = sp.get("cueList");
+    const cueIdParam = sp.get("cueId");
     if (!cueListParam) return;
-    // Ensure the target cue list is visible and active
     setVisibleListIds(prev => prev.has(cueListParam) ? prev : new Set([...prev, cueListParam]));
     setActiveListId(cueListParam);
     if (!cueIdParam) return;
-    // Scroll to the cue's start block
     const cue = initialCues.find(c => c.id === cueIdParam);
     if (!cue) return;
     const blockId = cue.start.kind === "block" ? cue.start.blockId : cue.start.afterBlockId;
