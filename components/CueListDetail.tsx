@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { BASE_PATH } from "@/lib/base-path";
@@ -20,34 +20,53 @@ type Props = {
 
 function MetaField({
   label,
+  labelHint,
   value,
   canEdit,
   multiline,
+  mono,
+  transform,
+  maxLength,
+  className,
   onSave,
 }: {
   label: string;
+  labelHint?: React.ReactNode;
   value: string;
   canEdit: boolean;
   multiline?: boolean;
-  onSave: (v: string) => Promise<void>;
+  mono?: boolean;
+  transform?: (v: string) => string;
+  maxLength?: number;
+  className?: string;
+  onSave: (v: string) => Promise<string | void>;
 }) {
   const [draft, setDraft] = useState(value);
   const [lastSeen, setLastSeen] = useState(value);
   const [saving, setSaving] = useState(false);
+  const [fieldError, setFieldError] = useState("");
 
-  if (lastSeen !== value) { setLastSeen(value); setDraft(value); }
+  if (lastSeen !== value) { setLastSeen(value); setDraft(value); setFieldError(""); }
 
   const commit = async () => {
-    if (draft === value) return;
+    const committed = draft.trim();
+    if (committed === value.trim()) return;
     setSaving(true);
-    try { await onSave(draft); } finally { setSaving(false); }
+    setFieldError("");
+    try {
+      const err = await onSave(committed);
+      if (err) setFieldError(err);
+    } finally { setSaving(false); }
   };
 
-  const cls = "w-full rounded border border-zinc-200 px-2 py-1.5 text-xs outline-none focus:border-zinc-400 disabled:opacity-50 placeholder:text-zinc-300";
+  const cls = `w-full rounded border border-zinc-200 px-2 py-1.5 text-xs outline-none focus:border-zinc-400 disabled:opacity-50 placeholder:text-zinc-300${mono ? " font-mono" : ""}`;
 
   return (
-    <div className="space-y-1">
-      <label className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">{label}</label>
+    <div className={`space-y-1${className ? ` ${className}` : ""}`}>
+      <label className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">
+        {label}
+        {labelHint && <span className="ml-1 font-normal normal-case">{labelHint}</span>}
+      </label>
       {canEdit ? (
         multiline ? (
           <textarea
@@ -62,19 +81,21 @@ function MetaField({
         ) : (
           <input
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => setDraft(transform ? transform(e.target.value) : e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             disabled={saving}
+            maxLength={maxLength}
             className={cls}
             placeholder="—"
           />
         )
       ) : (
-        <p className="text-xs text-zinc-600 whitespace-pre-wrap min-h-[1.25rem]">
+        <p className={`text-xs text-zinc-600 whitespace-pre-wrap min-h-[1.25rem]${mono ? " font-mono" : ""}`}>
           {value || <span className="text-zinc-300 italic">—</span>}
         </p>
       )}
+      {fieldError && <p className="text-[10px] text-red-500">{fieldError}</p>}
     </div>
   );
 }
@@ -180,7 +201,7 @@ export default function CueListDetail({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const patch = async (fields: { name?: string; notes?: string }) => {
+  const patch = async (fields: { name?: string; notes?: string; abbr?: string | null }): Promise<string | void> => {
     const res = await fetch(
       `${BASE_PATH}/api/production/${productionId}/cuelists/${cueList.id}`,
       {
@@ -191,7 +212,11 @@ export default function CueListDetail({
     );
     if (res.ok) {
       setCueList((prev) => ({ ...prev, ...fields }));
+      return;
     }
+    if (res.status === 409) return "简称已被同项目其他Cue表使用";
+    const j = await res.json() as { error?: string };
+    return j.error ?? "保存失败";
   };
 
   const handleDelete = async () => {
@@ -226,12 +251,26 @@ export default function CueListDetail({
 
         {/* Meta */}
         <div className="rounded-2xl bg-white shadow-sm p-4 space-y-3">
-          <MetaField
-            label="名称"
-            value={cueList.name}
-            canEdit={canEdit}
-            onSave={(v) => patch({ name: v })}
-          />
+          <div className="flex items-start gap-2">
+            <MetaField
+              label="名称"
+              value={cueList.name}
+              canEdit={canEdit}
+              className="flex-1 min-w-0"
+              onSave={(v) => patch({ name: v })}
+            />
+            <MetaField
+              label="简称"
+              labelHint={<span className="text-zinc-300 text-[9px]">可选</span>}
+              value={cueList.abbr ?? ""}
+              canEdit={canEdit}
+              mono
+              transform={(v) => v.toUpperCase()}
+              maxLength={8}
+              className="w-16 shrink-0"
+              onSave={(v) => patch({ abbr: v || null })}
+            />
+          </div>
           <MetaField
             label="备注"
             value={cueList.notes}

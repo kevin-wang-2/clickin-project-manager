@@ -46,11 +46,20 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
   if (!canEditCueList(session.openId, memberRoles, session.isAdmin, cueList, permissions))
     return Response.json({ error: "权限不足" }, { status: 403 });
 
-  const body = await req.json() as { name?: string; notes?: string };
-  await updateCueList(cueListId, id, {
+  const body = await req.json() as { name?: string; notes?: string; abbr?: string | null };
+  const fields: Parameters<typeof updateCueList>[2] = {
     name:  body.name?.trim(),
     notes: body.notes?.trim(),
-  });
+  };
+  if ("abbr" in body) fields.abbr = body.abbr?.trim().toUpperCase() || null;
+
+  try {
+    await updateCueList(cueListId, id, fields);
+  } catch (e: unknown) {
+    if ((e as { constraint?: string }).constraint === "cue_list_abbr_production_unique")
+      return Response.json({ error: "简称已被同项目其他Cue表使用" }, { status: 409 });
+    throw e;
+  }
   return Response.json({ ok: true });
 }
 
