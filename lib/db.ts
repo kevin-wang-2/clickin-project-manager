@@ -320,10 +320,26 @@ export async function updateVersionStatus(
   versionId: string,
   status: 'committed' | 'frozen' | 'archived',
 ): Promise<void> {
-  await getPool().query(
-    "UPDATE version SET status = $1 WHERE id = $2",
-    [status, versionId]
-  );
+  if (status === 'frozen') {
+    // Freeze the target version and all its ancestors (except archived ones).
+    await getPool().query(
+      `WITH RECURSIVE ancestors AS (
+         SELECT id, parent_version_id FROM version WHERE id = $1
+         UNION ALL
+         SELECT v.id, v.parent_version_id FROM version v
+         JOIN ancestors a ON v.id = a.parent_version_id
+       )
+       UPDATE version SET status = 'frozen'
+       WHERE id IN (SELECT id FROM ancestors)
+         AND status != 'archived'`,
+      [versionId]
+    );
+  } else {
+    await getPool().query(
+      "UPDATE version SET status = $1 WHERE id = $2",
+      [status, versionId]
+    );
+  }
 }
 
 // ─── Read ─────────────────────────────────────────────────────────────────────
