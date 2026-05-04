@@ -4,13 +4,17 @@ import { useState } from "react";
 import Link from "next/link";
 import ScenesManager from "./ScenesManager";
 import CharactersManager from "./CharactersManager";
-import type { SceneDetail, CharacterDetail } from "@/lib/db";
+import VersionSelector from "./VersionSelector";
+import { BASE_PATH } from "@/lib/base-path";
+import type { SceneDetail, CharacterDetail, Version } from "@/lib/db";
 
 type Tab = "scenes" | "characters";
 
 type Props = {
   productionId: string;
   productionName: string;
+  versions: Version[];
+  versionId: string | null;
   initialScenes: SceneDetail[];
   rehearsalMarks: Record<string, string[]>;
   initialCharacters: CharacterDetail[];
@@ -21,13 +25,33 @@ type Props = {
 export default function Dramaturgy({
   productionId,
   productionName,
+  versions,
+  versionId: initialVersionId,
   initialScenes,
-  rehearsalMarks,
+  rehearsalMarks: initialRehearsalMarks,
   initialCharacters,
   canEdit,
   canImport,
 }: Props) {
   const [tab, setTab] = useState<Tab>("scenes");
+  const [currentVersionId, setCurrentVersionId] = useState<string | null>(initialVersionId);
+  const [scenes, setScenes] = useState<SceneDetail[]>(initialScenes);
+  const [rehearsalMarks, setRehearsalMarks] = useState<Record<string, string[]>>(initialRehearsalMarks);
+  const [characters, setCharacters] = useState<CharacterDetail[]>(initialCharacters);
+
+  const handleVersionChange = async (versionId: string) => {
+    const [scenesData, charsData] = await Promise.all([
+      fetch(`${BASE_PATH}/api/production/${productionId}/scenes?versionId=${versionId}`).then(r => r.json()),
+      fetch(`${BASE_PATH}/api/production/${productionId}/characters?versionId=${versionId}`).then(r => r.json()),
+    ]);
+    setScenes(scenesData);
+    setCharacters(charsData);
+    setRehearsalMarks({});
+    setCurrentVersionId(versionId);
+  };
+
+  const currentVersion = versions.find(v => v.id === currentVersionId);
+  const effectiveCanEdit = canEdit && (!currentVersion || currentVersion.status === "editing" || currentVersion.status === "committed");
 
   return (
     <div className="min-h-screen bg-zinc-100 px-4 py-8">
@@ -39,6 +63,15 @@ export default function Dramaturgy({
           <div className="text-right flex flex-col items-end gap-1">
             <p className="text-xs font-semibold tracking-widest text-zinc-300 uppercase">Dramaturgy</p>
             <p className="text-sm font-bold text-zinc-500">{productionName}</p>
+            {versions.length > 0 && (
+              <VersionSelector
+                productionId={productionId}
+                versions={versions}
+                currentVersionId={currentVersionId}
+                canManage={canEdit}
+                onChange={handleVersionChange}
+              />
+            )}
             {canImport && tab === "scenes" && (
               <Link href={`/production/${productionId}/import-scenes`} className="text-xs text-blue-500 hover:underline">
                 导入章节信息
@@ -66,19 +99,21 @@ export default function Dramaturgy({
 
         {tab === "scenes" ? (
           <ScenesManager
+            key={currentVersionId ?? ""}
             productionId={productionId}
             productionName={productionName}
-            initialScenes={initialScenes}
+            initialScenes={scenes}
             rehearsalMarks={rehearsalMarks}
-            canEdit={canEdit}
+            canEdit={effectiveCanEdit}
             embedded
           />
         ) : (
           <CharactersManager
+            key={currentVersionId ?? ""}
             productionId={productionId}
             productionName={productionName}
-            initialCharacters={initialCharacters}
-            canEdit={canEdit}
+            initialCharacters={characters}
+            canEdit={effectiveCanEdit}
             embedded
           />
         )}
