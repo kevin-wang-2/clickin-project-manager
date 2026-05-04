@@ -7,6 +7,10 @@ import { getSession } from "@/lib/session";
 import {
   getProductionMemberContext,
   getProductionName,
+  listVersions,
+  listScenesByVersion,
+  listCharactersByVersion,
+  listRehearsalMarksByVersion,
   listProductionScenes,
   listRehearsalMarksByScene,
   listProductionCharacters,
@@ -30,18 +34,37 @@ export default async function DramaturgyPage({
   const canEdit = hasPermission("script:metadata", session.isAdmin, memberRoles, overrides);
   const canImport = hasPermission("manage_permissions", session.isAdmin, memberRoles, overrides);
 
-  const [name, scenes, rehearsalMarks, characters] = await Promise.all([
+  const cookieVersionId = cookieStore.get(`ver_${id}`)?.value ?? null;
+
+  const [name, versions] = await Promise.all([
     getProductionName(id),
-    listProductionScenes(id),
-    listRehearsalMarksByScene(id),
-    listProductionCharacters(id),
+    listVersions(id),
   ]);
   if (!name) redirect("/");
+
+  const resolvedVersionId = cookieVersionId
+    ?? versions.find(v => v.status === "editing")?.id
+    ?? versions[0]?.id
+    ?? null;
+
+  const [scenes, rehearsalMarks, characters] = resolvedVersionId
+    ? await Promise.all([
+        listScenesByVersion(resolvedVersionId),
+        listRehearsalMarksByVersion(resolvedVersionId),
+        listCharactersByVersion(resolvedVersionId),
+      ])
+    : await Promise.all([
+        listProductionScenes(id),
+        listRehearsalMarksByScene(id),
+        listProductionCharacters(id),
+      ]);
 
   return (
     <Dramaturgy
       productionId={id}
       productionName={name}
+      versions={versions}
+      versionId={resolvedVersionId}
       initialScenes={scenes}
       rehearsalMarks={rehearsalMarks}
       initialCharacters={characters}

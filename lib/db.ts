@@ -1552,6 +1552,84 @@ export async function listRehearsalMarksByScene(productionId: string): Promise<R
   return map;
 }
 
+export async function listScenesByVersion(versionId: string): Promise<SceneDetail[]> {
+  const res = await getPool().query<{
+    id: string; num: string; name: string; parent_id: string | null;
+    synopsis: string | null; action_line: string | null; music: string | null;
+    stage_notes: string | null; expected_duration: string | null;
+  }>(
+    `SELECT sv.scene_id AS id, sv.num, sv.name, sv.parent_id,
+            s.synopsis, s.action_line, s.music, s.stage_notes, s.expected_duration
+     FROM scene_version sv
+     LEFT JOIN scene s ON s.id = sv.scene_id
+     WHERE sv.version_id = $1
+     ORDER BY sv.sort_order`,
+    [versionId]
+  );
+  return res.rows.map((r) => ({
+    id: r.id, number: r.num, name: r.name, parentId: r.parent_id,
+    synopsis: r.synopsis ?? "",
+    actionLine: r.action_line ?? "",
+    music: r.music ?? "",
+    stageNotes: r.stage_notes ?? "",
+    expectedDuration: r.expected_duration ?? "",
+  }));
+}
+
+export async function listCharactersByVersion(versionId: string): Promise<CharacterDetail[]> {
+  const pool = getPool();
+  const [charsRes, membersRes] = await Promise.all([
+    pool.query<{
+      id: string; name: string; is_aggregate: boolean;
+      gender: string | null; biography: string | null; role_type: string | null;
+    }>(
+      `SELECT cv.character_id AS id, cv.name, cv.is_aggregate,
+              c.gender, c.biography, c.role_type
+       FROM character_version cv
+       LEFT JOIN character c ON c.id = cv.character_id
+       WHERE cv.version_id = $1
+       ORDER BY cv.sort_order`,
+      [versionId]
+    ),
+    pool.query<{ aggregate_id: string; member_id: string }>(
+      `SELECT ca.aggregate_id, ca.member_id FROM character_aggregate ca
+       JOIN character_version cv ON cv.character_id = ca.aggregate_id
+       WHERE cv.version_id = $1`,
+      [versionId]
+    ),
+  ]);
+  const memberMap = new Map<string, string[]>();
+  for (const row of membersRes.rows) {
+    if (!memberMap.has(row.aggregate_id)) memberMap.set(row.aggregate_id, []);
+    memberMap.get(row.aggregate_id)!.push(row.member_id);
+  }
+  return charsRes.rows.map((r) => ({
+    id: r.id, name: r.name, isAggregate: r.is_aggregate,
+    gender: r.gender ?? "",
+    biography: r.biography ?? "",
+    roleType: r.role_type ?? "",
+    memberIds: memberMap.get(r.id) ?? [],
+  }));
+}
+
+export async function listRehearsalMarksByVersion(versionId: string): Promise<Record<string, string[]>> {
+  const res = await getPool().query<{ scene_id: string; rehearsal_mark: string }>(
+    `SELECT s.scene_id, s.rehearsal_mark
+     FROM script_version sv
+     JOIN script s ON s.id = sv.snapshot_id
+     WHERE sv.version_id = $1 AND s.scene_id IS NOT NULL AND s.rehearsal_mark IS NOT NULL
+     ORDER BY sv.sort_key`,
+    [versionId]
+  );
+  const map: Record<string, string[]> = {};
+  for (const row of res.rows) {
+    if (!map[row.scene_id]) map[row.scene_id] = [];
+    const arr = map[row.scene_id];
+    if (arr[arr.length - 1] !== row.rehearsal_mark) arr.push(row.rehearsal_mark);
+  }
+  return map;
+}
+
 export async function listProductionScenes(productionId: string): Promise<SceneDetail[]> {
   const res = await getPool().query<{
     id: string; num: string; name: string; parent_id: string | null;
