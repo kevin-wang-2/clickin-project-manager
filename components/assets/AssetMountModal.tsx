@@ -16,9 +16,10 @@ interface Props {
 
 export default function AssetMountModal({ productionId, mountCtx, versionId, onDone, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("select");
+  const [uploadedAssetId, setUploadedAssetId] = useState<string | null>(null);
 
   function handleUploadDone(result: UploadResult) {
-    // After upload switch back to select so user can pick & configure mount mode
+    setUploadedAssetId(result.assetId);
     setTab("select");
   }
 
@@ -57,6 +58,7 @@ export default function AssetMountModal({ productionId, mountCtx, versionId, onD
           <AssetSelectPanel
             productionId={productionId}
             mountCtx={mountCtx}
+            preSelectedId={uploadedAssetId}
             onMounted={assetId => onDone({ assetId, fileName: assetId })}
             onCancel={onClose}
           />

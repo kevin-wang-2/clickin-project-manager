@@ -30,15 +30,16 @@ function isSplittable(mt: MountType): mt is "block_snapshot" | "cue_revision" {
 interface Props {
   productionId: string;
   mountCtx: MountContext;
+  preSelectedId?: string | null;
   onMounted: (assetId: string) => void;
   onCancel?: () => void;
 }
 
-export default function AssetSelectPanel({ productionId, mountCtx, onMounted, onCancel }: Props) {
+export default function AssetSelectPanel({ productionId, mountCtx, preSelectedId, onMounted, onCancel }: Props) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(preSelectedId ?? null);
   // Only block/cue snapshot types support CoW-based tracking across versions
   const supportsCow = (["block", "block_snapshot", "cue", "cue_revision"] as MountType[]).includes(mountCtx.mountType);
   const hasVersion = !!mountCtx.versionId;
