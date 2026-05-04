@@ -210,6 +210,14 @@ export async function createVersion(
       [newVersionId, fromVersionId]
     );
 
+    // Copy asset version relations
+    await client.query(
+      `INSERT INTO asset_version_rel (asset_id, version_id, asset_file_id)
+       SELECT asset_id, $1, asset_file_id FROM asset_version_rel WHERE version_id = $2
+       ON CONFLICT (asset_id, version_id) DO NOTHING`,
+      [newVersionId, fromVersionId]
+    );
+
     await client.query("COMMIT");
     return {
       id: newVersionId,
