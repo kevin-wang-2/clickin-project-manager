@@ -1714,6 +1714,7 @@ function ScriptBlock({
   isMarkStart,
   commentCount,
   onCommentClick,
+  onAssetClick,
   index = 0,
   lineNum,
   isSearchHighlight,
@@ -1755,6 +1756,7 @@ function ScriptBlock({
   isMarkStart: boolean;
   commentCount: number;
   onCommentClick: () => void;
+  onAssetClick: () => void;
   index?: number;
   lineNum?: number;
   isSearchHighlight?: "match" | "focused";
@@ -1969,6 +1971,13 @@ function ScriptBlock({
             {isStage ? "台词" : "舞台"}
           </button>
         )}
+        <button
+          onClick={e => { e.stopPropagation(); onAssetClick(); }}
+          title="附件"
+          className="rounded px-1.5 py-0.5 text-[11px] text-zinc-200 opacity-0 transition-opacity hover:text-zinc-400 group-hover:opacity-100"
+        >
+          附件
+        </button>
         <button
           onClick={e => { e.stopPropagation(); onCommentClick(); }}
           title="评论"
@@ -2373,16 +2382,6 @@ function CommentsPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        {/* Block-level assets */}
-        <BlockMountAssets
-          productionId={productionId}
-          blockId={blockId}
-          versionId={versionId ?? null}
-          label="Block 附件"
-          canEdit={true}
-          display="panel"
-        />
-
         {topLevel.length === 0 && <p className="py-4 text-center text-xs text-zinc-300">暂无评论</p>}
         {topLevel.map(topC => (
           <div key={topC.id}>
@@ -3047,6 +3046,7 @@ export default function ScriptEditor({
 
   const [comments, setComments] = useState<Comment[]>([]);
   const [activeCommentBlockId, setActiveCommentBlockId] = useState<string | null>(null);
+  const [activeAssetBlockId, setActiveAssetBlockId] = useState<string | null>(null);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [meOpenId, setMeOpenId] = useState("");
   const [meIsAdmin, setMeIsAdmin] = useState(false);
@@ -4159,7 +4159,8 @@ export default function ScriptEditor({
                   onMarkChange={(m) => updateBlockMark(block.id, m)}
                   isMarkStart={isMarkStart}
                   commentCount={comments.filter(c => c.contextId === block.id).length}
-                  onCommentClick={() => setActiveCommentBlockId(block.id)}
+                  onCommentClick={() => { setActiveAssetBlockId(null); setActiveCommentBlockId(block.id); }}
+                  onAssetClick={() => { setActiveCommentBlockId(null); setActiveAssetBlockId(block.id); }}
                   canEditText={canEditText}
                   canEditMetadata={canEditMetadata}
                   canEditRehearsalMark={canEditRehearsalMark}
@@ -4202,6 +4203,25 @@ export default function ScriptEditor({
               initialGroups={tagGroups}
               canEdit={canEditMetadata}
               onGroupsChange={setTagGroups}
+            />
+          </div>
+        </div>
+      )}
+
+      {activeAssetBlockId && productionId && (
+        <div className="fixed right-0 top-14 bottom-0 z-30 flex w-80 flex-col border-l border-zinc-200 bg-white shadow-xl">
+          <div className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-4 py-3">
+            <span className="text-sm font-semibold text-zinc-700">附件</span>
+            <button onClick={() => setActiveAssetBlockId(null)} className="text-lg leading-none text-zinc-300 hover:text-zinc-500">×</button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3">
+            <BlockMountAssets
+              productionId={productionId}
+              blockId={activeAssetBlockId}
+              versionId={activeVersionId ?? null}
+              label="Block 附件"
+              canEdit={true}
+              display="panel"
             />
           </div>
         </div>
