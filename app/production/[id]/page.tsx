@@ -10,6 +10,7 @@ import {
 } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import ArchiveButton from "@/components/ArchiveButton";
+import ProductionNameEditor from "@/components/ProductionNameEditor";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params;
@@ -75,7 +76,7 @@ export default async function ProductionDashboard({
                   已归档
                 </span>
               )}
-              <h1 className="text-sm font-bold tracking-[0.2em] text-zinc-400 uppercase">{name}</h1>
+              <ProductionNameEditor productionId={id} name={name} canEdit={canManage} />
             </div>
             {canManage && <ArchiveButton productionId={id} isArchived={isArchived} />}
           </div>

@@ -1446,6 +1446,10 @@ export async function getProductionName(id: string): Promise<string | null> {
   return res.rows[0]?.name ?? null;
 }
 
+export async function updateProductionName(id: string, name: string): Promise<void> {
+  await getPool().query("UPDATE production SET name = $1 WHERE id = $2", [name, id]);
+}
+
 export type MemberWithRoles = {
   openId: string;
   name: string;
