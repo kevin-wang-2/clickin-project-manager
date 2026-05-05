@@ -1,7 +1,8 @@
 import { type NextRequest } from "next/server";
-import { loadProduction, canUserAccessProduction, getActiveVersionId, listVersions } from "@/lib/db";
+import { loadProduction, canUserAccessProduction, getActiveVersionId, listVersions, updateProductionName, getProductionMemberContext } from "@/lib/db";
 import { loadFromDB } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
+import { hasPermission } from "@/lib/roles";
 
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[id]">) {
   const session = getSession(req.cookies);
@@ -35,4 +36,21 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[
     console.error("[production] load error:", err);
     return Response.json({ error: "加载失败" }, { status: 500 });
   }
+}
+
+export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production/[id]">) {
+  const session = getSession(req.cookies);
+  if (!session) return Response.json({ error: "未登录" }, { status: 401 });
+
+  const { id } = await ctx.params;
+  const { memberRoles, overrides } = await getProductionMemberContext(session.openId, session.isAdmin, id);
+  if (!hasPermission("manage_permissions", session.isAdmin, memberRoles, overrides)) {
+    return Response.json({ error: "无权修改" }, { status: 403 });
+  }
+
+  const { name } = await req.json() as { name?: string };
+  if (!name?.trim()) return Response.json({ error: "名称不能为空" }, { status: 400 });
+
+  await updateProductionName(id, name.trim());
+  return Response.json({ ok: true });
 }
