@@ -171,16 +171,6 @@ npm run dev
 
 ## 5. 数据库
 
-### 迁移约定
-
-- 所有结构变更写在 `db/migrate-*.sql` 中，文件名描述变更内容。
-- 新建表时，先看 `db/schema.sql` 了解已有结构。
-- 每次迁移在服务器上手动执行一次：
-
-```bash
-ssh click-in "sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/migrate-xxx.sql"
-```
-
 ### 两个数据库
 
 | 库 | 用途 | 连接配置 |
@@ -189,6 +179,45 @@ ssh click-in "sudo -u postgres psql -d script_editor -f /var/www/production-mana
 | `click_in_agent` | Bot 对话、记忆 | `AGENT_PG*` 环境变量 |
 
 两库完全独立，不做跨库 join。
+
+### Schema 文件
+
+- **`db/schema.sql`** — 主库（`script_editor`）的完整规范 schema，幂等，可在空库或现有库上重复执行。涵盖所有 44 张表、枚举类型和索引。
+- **`db/setup-agent-db.sql`** — Agent 库（`click_in_agent`）的一次性初始化脚本（含建库、建用户、建 4 张表）。
+
+首次部署时：
+
+```bash
+# 主库
+sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/schema.sql
+
+# Agent 库（仅首次，需先修改 CHANGE_ME 密码）
+sudo -u postgres psql -f /var/www/production-manager/db/setup-agent-db.sql
+```
+
+### 新增 Schema 的约定
+
+开发过程中如需新增表或字段，直接在 `db/` 目录下新建一个描述性 SQL 文件（如 `db/add-something.sql`），并在文件顶部注释中注明：
+
+1. **依赖**：该文件依赖哪些已有的表/字段（新文件必须在依赖已执行完后再跑）
+2. **用途**：简要说明变更内容
+
+```sql
+-- db/add-something.sql
+-- 依赖：production 表、feishu_user 表
+-- 用途：新增 XXX 功能所需的 something 表
+
+ALTER TABLE production ADD COLUMN IF NOT EXISTS new_col TEXT;
+CREATE TABLE IF NOT EXISTS something ( ... );
+```
+
+在服务器上手动执行，**不重复执行**：
+
+```bash
+ssh click-in "sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/add-something.sql"
+```
+
+执行完毕后，同步更新 `db/schema.sql`，将该变更合并进去（保持 schema.sql 始终是当前生产状态的完整快照）。
 
 ### 时区约定
 
