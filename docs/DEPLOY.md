@@ -166,24 +166,36 @@ crontab -e
 
 ## 日常发版
 
-```bash
-# 同步代码
-rsync -a --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='.env.local' \
-  ./ <server>:/var/www/production-manager/
+push 到 `main` 后 GitHub Actions 自动完成：
 
-# Build & 重启（npm install 仅在新增依赖时需要）
-ssh <server> "cd /var/www/production-manager && npm install && npm run build && pm2 restart production-manager --update-env"
+1. `npm ci` + `npm run build`（standalone 模式）
+2. 打包产物，上传到服务器 `releases/<run>-<sha>/`
+3. 按 git commit 顺序执行新增的 `db/add-*.sql`（已执行记录在 `shared/db-applied.txt`）
+4. 切换 `current` symlink → 新 release
+5. `pm2 reload` 热重启
+6. 清理旧 releases（保留最新 5 个）
+
+**无需任何手动操作**。
+
+## 回滚
+
+```bash
+ssh <server> "bash /var/www/production-manager/shared/scripts/rollback.sh"
+# 回滚两个版本：
+ssh <server> "bash /var/www/production-manager/shared/scripts/rollback.sh 2"
 ```
+
+脚本将 `current` symlink 切到上一个（或第 N 个）release，并热重启 PM2。
 
 ## 数据库迁移
 
-每次发版如有 schema 变更，在部署前执行对应 SQL 文件（文件在 `db/` 目录，文件名见 commit message）：
+CI 自动处理。如需手动执行（紧急修复）：
 
 ```bash
-ssh <server> "sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/add-xxx.sql"
+ssh <server> "sudo -u postgres psql -d script_editor -f /tmp/fix.sql"
+# 手动追加到 manifest，防止 CI 重复执行：
+ssh <server> "echo 'add-xxx.sql' >> /var/www/production-manager/shared/db-applied.txt"
 ```
-
-只需执行尚未在服务器上跑过的文件，**不重复执行**。
 
 ---
 
