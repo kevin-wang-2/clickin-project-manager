@@ -3,7 +3,7 @@ import { getSession } from "@/lib/session";
 import { getProductionMemberContext, canUserAccessProduction } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { createAsset, listAssets, type AssetType } from "@/lib/asset-db";
-import { putR2Object, getR2Object, thumbnailR2Key, completeMultipartUpload } from "@/lib/r2";
+import { putR2Object, getR2Object, thumbnailR2Key, completeMultipartUpload, listMultipartParts } from "@/lib/r2";
 import sharp from "sharp";
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -54,7 +54,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!body.r2Key || !body.fileId || !body.fileName || !body.uploadId || !Array.isArray(body.parts))
         return Response.json({ error: "缺少 r2Key / fileId / fileName / uploadId / parts" }, { status: 400 });
 
-      await completeMultipartUpload(body.r2Key, body.uploadId, body.parts);
+      // Fetch real ETags server-side — client-provided ETags are unreliable because
+      // R2 CORS does not expose the ETag response header to browsers.
+      const parts = await listMultipartParts(body.r2Key, body.uploadId);
+      await completeMultipartUpload(body.r2Key, body.uploadId, parts);
 
       const mimeType = body.mimeType ?? "application/octet-stream";
       let thumbKey: string | null = null;
