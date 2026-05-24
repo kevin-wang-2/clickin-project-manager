@@ -177,13 +177,13 @@ ssh <server> "cd /var/www/production-manager && npm install && npm run build && 
 
 ## 数据库迁移
 
-每次发版如有 schema 变更，在部署前执行对应迁移文件：
+每次发版如有 schema 变更，在部署前执行对应 SQL 文件（文件在 `db/` 目录，文件名见 commit message）：
 
 ```bash
-ssh <server> "sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/migrate-xxx.sql"
+ssh <server> "sudo -u postgres psql -d script_editor -f /var/www/production-manager/db/add-xxx.sql"
 ```
 
-迁移文件在 `db/migrate-*.sql`，只需执行尚未在服务器上跑过的文件，不重复执行。
+只需执行尚未在服务器上跑过的文件，**不重复执行**。
 
 ---
 
