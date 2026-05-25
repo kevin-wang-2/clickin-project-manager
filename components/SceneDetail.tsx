@@ -6,6 +6,8 @@ import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { SceneDetail } from "@/lib/db";
 import MountPointAssets from "@/components/assets/MountPointAssets";
+import DurationInput from "@/components/DurationInput";
+import { parseDurationSafe, parseDuration } from "@/lib/duration";
 
 type Props = {
   productionId: string;
@@ -166,12 +168,18 @@ export default function SceneDetailView({ productionId, productionName, scene, c
 
         {/* Metadata */}
         <div className="rounded-2xl bg-white shadow-sm p-6 space-y-5 mb-4">
-          <Field
-            label="预期时长"
-            value={scene.expectedDuration}
-            canEdit={canEdit}
-            onSave={(v) => patchScene({ expectedDuration: v })}
-          />
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold tracking-widest text-zinc-400 uppercase">预期时长</label>
+            <DurationInput
+              value={parseDuration(scene.expectedDuration)}
+              canEdit={canEdit}
+              onSave={async (seconds) => {
+                await patchScene({ 
+                  expectedDuration: seconds != null ? seconds.toString() : "" 
+                });
+              }}
+            />
+          </div>
           <Field
             label="简介"
             value={scene.synopsis}
