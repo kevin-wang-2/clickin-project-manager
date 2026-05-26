@@ -28,8 +28,10 @@ function getSigningKey(dateStr: string): Buffer {
 }
 
 function sortedParams(entries: Record<string, string>): URLSearchParams {
+  // AWS Signature V4 requires byte-order (code point) sort, not locale-aware sort.
+  // localeCompare treats 'r' < 'X' (alphabetically x > r), but byte-order has X(0x58) < r(0x72).
   return new URLSearchParams(
-    Object.entries(entries).sort(([a], [b]) => a.localeCompare(b))
+    Object.entries(entries).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   );
 }
 
@@ -42,17 +44,28 @@ export function thumbnailR2Key(assetFileId: string): string {
   return `thumbnails/${assetFileId}.webp`;
 }
 
-/** Presigned GET URL. */
-export function presignedGet(key: string, expiresIn = 3600): string {
+/** Presigned GET URL.
+ *  opts.inline=true  → adds response-content-disposition=inline (browser displays, doesn't download)
+ *  opts.contentType  → overrides Content-Type in the response (useful for inline PDF/video preview)
+ */
+export function presignedGet(
+  key: string,
+  expiresIn = 3600,
+  opts?: { inline?: boolean; contentType?: string },
+): string {
   const { dateStr, amzDate } = dateParts();
   const scope = `${dateStr}/${region}/s3/aws4_request`;
-  const params = sortedParams({
+  const baseParams: Record<string, string> = {
     "X-Amz-Algorithm":    "AWS4-HMAC-SHA256",
     "X-Amz-Credential":   `${accessKeyId}/${scope}`,
     "X-Amz-Date":         amzDate,
     "X-Amz-Expires":      String(expiresIn),
     "X-Amz-SignedHeaders": "host",
-  });
+  };
+  if (opts?.inline)      baseParams["response-content-disposition"] = "inline";
+  if (opts?.contentType) baseParams["response-content-type"] = opts.contentType;
+
+  const params = sortedParams(baseParams);
   const canonical = [
     "GET",
     `/${r2Bucket}/${key}`,
@@ -196,6 +209,53 @@ export function presignedUploadPart(key: string, uploadId: string, partNumber: n
     .digest("hex");
   params.set("X-Amz-Signature", sig);
   return `${endpoint}/${r2Bucket}/${key}?${params.toString()}`;
+}
+
+/** List all uploaded parts for a multipart upload (server-side, uses Authorization header). */
+export async function listMultipartParts(
+  key: string,
+  uploadId: string,
+): Promise<{ partNumber: number; eTag: string }[]> {
+  const { dateStr, amzDate } = dateParts();
+  const scope = `${dateStr}/${region}/s3/aws4_request`;
+  const emptyHash = sha256hex("");
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  // byte-order sort: max-parts (m=0x6D) < uploadId (u=0x75)
+  const queryStr = `max-parts=1000&uploadId=${encodeURIComponent(uploadId)}`;
+  const canonical = [
+    "GET",
+    `/${r2Bucket}/${key}`,
+    queryStr,
+    `host:${host}\nx-amz-content-sha256:${emptyHash}\nx-amz-date:${amzDate}\n`,
+    signedHeaders,
+    emptyHash,
+  ].join("\n");
+  const sig = crypto
+    .createHmac("sha256", getSigningKey(dateStr))
+    .update(`AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${sha256hex(canonical)}`)
+    .digest("hex");
+
+  const res = await fetch(`${endpoint}/${r2Bucket}/${key}?${queryStr}`, {
+    headers: {
+      "X-Amz-Content-Sha256": emptyHash,
+      "X-Amz-Date": amzDate,
+      Authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`,
+    },
+  });
+  if (!res.ok) throw new Error(`ListParts failed: ${res.status} ${await res.text()}`);
+  const xml = await res.text();
+
+  // Parse <Part><PartNumber>N</PartNumber><ETag>"..."</ETag></Part>
+  const parts: { partNumber: number; eTag: string }[] = [];
+  const partRe = /<Part>[\s\S]*?<\/Part>/g;
+  let m: RegExpExecArray | null;
+  while ((m = partRe.exec(xml)) !== null) {
+    const block = m[0];
+    const pn = block.match(/<PartNumber>(\d+)<\/PartNumber>/)?.[1];
+    const et = block.match(/<ETag>(.*?)<\/ETag>/)?.[1];
+    if (pn && et) parts.push({ partNumber: Number(pn), eTag: et });
+  }
+  return parts;
 }
 
 /** Complete a multipart upload. parts must include ETag from each UploadPart response. */
