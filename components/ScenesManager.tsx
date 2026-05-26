@@ -6,6 +6,8 @@ import { BASE_PATH } from "@/lib/base-path";
 import VersionSelector from "./VersionSelector";
 import MountPointAssets from "./assets/MountPointAssets";
 import type { SceneDetail, Version } from "@/lib/db";
+import DurationInput from "@/components/DurationInput";
+import { parseDuration } from "@/lib/duration";
 
 type MetaFields = Pick<SceneDetail, "synopsis" | "actionLine" | "music" | "stageNotes" | "expectedDuration">;
 
@@ -223,12 +225,18 @@ function SceneEditRow({
         <tr className={`border-b border-zinc-100${indent ? " bg-zinc-50/40" : " bg-zinc-50/60"}`}>
           <td colSpan={4} className={`pb-4 pt-2${indent ? " pl-8 pr-4" : " px-4"}`}>
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-              <MetaField
-                label="预期时长"
-                value={scene.expectedDuration}
-                canEdit={canEdit}
-                onSave={(v) => onPatchMeta({ expectedDuration: v })}
-              />
+              <div className="space-y-1">
+                <label className="text-[10px] font-semibold tracking-widest text-zinc-400 uppercase">预期时长</label>
+                <DurationInput
+                  value={parseDuration(scene.expectedDuration)}
+                  canEdit={canEdit}
+                  onSave={async (seconds) => {
+                    await onPatchMeta({ 
+                      expectedDuration: seconds != null ? seconds.toString() : "" 
+                    });
+                  }}
+                />
+              </div>
               <div />
               <MetaField
                 label="简介"
