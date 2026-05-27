@@ -1327,7 +1327,9 @@ export default function CuePage({
     const { start, end } = selection;
 
     const existing = (cuesByList.get(activeListId) ?? []).map(c => c.number);
-    const nums = existing.map(n => parseInt(n.replace(/\D/g, ""))).filter(n => !isNaN(n));
+    // parseInt stops at the first non-digit, so "7.5" → 7, "1-0" → 1.
+    // The old replace(/\D/g,"") was too greedy: "7.5"→75, "1-0"→10.
+    const nums = existing.map(n => parseInt(n, 10)).filter(n => !isNaN(n));
     const next = nums.length ? Math.max(...nums) + 1 : 1;
 
     const vid = versionIdRef.current;
@@ -1833,7 +1835,7 @@ export default function CuePage({
       if (selection.kind !== "pending" || !activeListId || !canEditActive || !copiedCue) return;
       const { start, end } = selection;
       const existing = (cuesByList.get(activeListId) ?? []).map(c => c.number);
-      const nums = existing.map(n => parseInt(n.replace(/\D/g, ""))).filter(n => !isNaN(n));
+      const nums = existing.map(n => parseInt(n, 10)).filter(n => !isNaN(n));
       const next = nums.length ? Math.max(...nums) + 1 : 1;
       const vid = versionIdRef.current;
       const vParam = vid ? `?v=${encodeURIComponent(vid)}` : "";
