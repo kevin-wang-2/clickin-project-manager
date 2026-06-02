@@ -1771,6 +1771,7 @@ function ScriptBlock({
   onAssetClick,
   dragTarget = null,
   isSelected = false,
+  isRecentlyMoved = false,
   selectedCount = 0,
   dismissToken = 0,
   canDeleteWithoutConfirmation = false,
@@ -1827,6 +1828,7 @@ function ScriptBlock({
   onAssetClick: () => void;
   dragTarget?: DragTarget | null;
   isSelected?: boolean;
+  isRecentlyMoved?: boolean;
   selectedCount?: number;
   dismissToken?: number;
   canDeleteWithoutConfirmation?: boolean;
@@ -1989,12 +1991,13 @@ function ScriptBlock({
       : (index ?? 0) % 2 === 1
         ? "bg-zinc-50/60"
         : "";
+  const movedGlowClass = isRecentlyMoved ? "script-block-moved-glow" : "";
 
   return (
     <div
       onDragOver={onDragOverBlock}
       onDrop={onDropBlock}
-      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass}`}
+      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass} ${movedGlowClass}`}
     >
       {dragTarget && (
         <div
@@ -2610,6 +2613,7 @@ export default function ScriptEditor({
   const [isReorderLocked, setIsReorderLocked] = useState(false);
   const [reorderNotice, setReorderNotice] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(() => new Set());
+  const [recentlyMovedBlockIds, setRecentlyMovedBlockIds] = useState<Set<string>>(() => new Set());
   const [dismissActionToken, setDismissActionToken] = useState(0);
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollLockedRef = useRef(true);
@@ -2680,6 +2684,7 @@ export default function ScriptEditor({
   const reorderUnlockFrame = useRef<number | null>(null);
   const pendingReorderUnlockRef = useRef(false);
   const reorderNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const movedHighlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blocksRef = useRef(blocks);
   const prevBlocksLengthRef = useRef(blocks.length);
   useLayoutEffect(() => { blocksRef.current = blocks; }, [blocks]);
@@ -2688,6 +2693,7 @@ export default function ScriptEditor({
     if (reorderUnlockFrame.current !== null) cancelAnimationFrame(reorderUnlockFrame.current);
     if (windowRangeFrameRef.current !== null) cancelAnimationFrame(windowRangeFrameRef.current);
     if (reorderNoticeTimer.current !== null) clearTimeout(reorderNoticeTimer.current);
+    if (movedHighlightTimer.current !== null) clearTimeout(movedHighlightTimer.current);
   }, []);
 
   const clearDragCountBadge = useCallback(() => {
@@ -3907,6 +3913,12 @@ export default function ScriptEditor({
 
     saveSnapshot();
     setBlocks(next);
+    if (movedHighlightTimer.current !== null) clearTimeout(movedHighlightTimer.current);
+    setRecentlyMovedBlockIds(new Set(moving.map((b) => b.id)));
+    movedHighlightTimer.current = setTimeout(() => {
+      movedHighlightTimer.current = null;
+      setRecentlyMovedBlockIds(new Set());
+    }, 3000);
     setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
     unlockReorderAfterCommit();
     return true;
@@ -4511,6 +4523,16 @@ export default function ScriptEditor({
         className="pointer-events-none fixed z-50 rounded border bg-white/90 px-1.5 py-0.5 text-lg font-semibold leading-none tabular-nums shadow-sm"
         style={{ borderColor: "#91a8ca", color: "#91a8ca" }}
       />
+      <style jsx global>{`
+        @keyframes scriptBlockMovedGlow {
+          0%, 100% { background-color: transparent; }
+          50% { background-color: #eef3fa; }
+        }
+
+        .script-block-moved-glow {
+          animation: scriptBlockMovedGlow 1s ease-in-out 3;
+        }
+      `}</style>
 
       {/* Document */}
       <main className="mx-auto max-w-3xl px-4 py-8">
@@ -4704,6 +4726,7 @@ export default function ScriptEditor({
                   isFocused={focusedId === block.id}
                   dragTarget={dragTarget?.id === block.id ? dragTarget : null}
                   isSelected={isSelected}
+                  isRecentlyMoved={recentlyMovedBlockIds.has(block.id)}
                   selectedCount={selectedCount}
                   canDeleteWithoutConfirmation={canDeleteWithoutConfirmation}
                   dismissToken={dismissActionToken}
