@@ -62,6 +62,11 @@ const makeBlock = (content = "", characterIds: string[] = [], type: BlockType = 
   rehearsalMark: null,
 });
 
+const isBlockEmptyForDelete = (block: Block) =>
+  block.content.trim() === "" &&
+  block.characterIds.length === 0 &&
+  Object.values(block.characterAnnotations).every((ann) => ann.trim() === "");
+
 // ─── contenteditable helpers ─────────────────────────────────────────────────
 
 function getTextBeforeCursor(div: HTMLDivElement): string {
@@ -1742,11 +1747,15 @@ function ScriptBlock({
   onDragEndBlock,
   onDragOverBlock,
   onDropBlock,
+  onToggleSelected,
   isMarkStart,
   commentCount,
   onCommentClick,
   onAssetClick,
   dragTarget = null,
+  isSelected = false,
+  selectedCount = 0,
+  canDeleteWithoutConfirmation = false,
   index = 0,
   lineNum,
   isSearchHighlight,
@@ -1791,11 +1800,15 @@ function ScriptBlock({
   onDragEndBlock: () => void;
   onDragOverBlock: (e: DragEvent<HTMLDivElement>) => void;
   onDropBlock: (e: DragEvent<HTMLDivElement>) => void;
+  onToggleSelected: () => void;
   isMarkStart: boolean;
   commentCount: number;
   onCommentClick: () => void;
   onAssetClick: () => void;
   dragTarget?: DragTarget | null;
+  isSelected?: boolean;
+  selectedCount?: number;
+  canDeleteWithoutConfirmation?: boolean;
   index?: number;
   lineNum?: number;
   isSearchHighlight?: "match" | "focused";
@@ -1820,6 +1833,7 @@ function ScriptBlock({
   const [charSelectorOpen, setCharSelectorOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmTypeAction, setConfirmTypeAction] = useState<"type" | "lyric" | null>(null);
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
@@ -1934,24 +1948,25 @@ function ScriptBlock({
   };
 
   const isStage = block.type === "stage";
-  const isEmptyForDelete =
-    block.content.trim() === "" &&
-    block.characterIds.length === 0 &&
-    Object.values(block.characterAnnotations).every((ann) => ann.trim() === "");
 
   const firstEditor = presenceEditors[0];
 
   const searchRingClass =
     isSearchHighlight === "focused" ? "ring-2 ring-inset ring-amber-400" :
     isSearchHighlight === "match"   ? "ring-1 ring-inset ring-amber-200" : "";
+  const blockBgClass = isSelected
+    ? "bg-[#eef3fa]"
+    : isFocused
+      ? "bg-zinc-100/70"
+      : (index ?? 0) % 2 === 1
+        ? "bg-zinc-50/60"
+        : "";
 
   return (
     <div
       onDragOver={onDragOverBlock}
       onDrop={onDropBlock}
-      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${
-        isFocused ? "bg-zinc-100/70" : (index ?? 0) % 2 === 1 ? "bg-zinc-50/60" : ""
-      }`}
+      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass}`}
     >
       {dragTarget && (
         <div
@@ -1987,7 +2002,9 @@ function ScriptBlock({
           {( /* `91a8ca` is my signature color (lighter version). ^v^ -- QPT */
             confirmDelete ? (
               <span className="absolute left-0 bottom-0 z-10 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm">
-                <span className="whitespace-nowrap text-[10px] text-zinc-400">确认删除此行？</span>
+                <span className="whitespace-nowrap text-[10px] text-zinc-400">
+                  {selectedCount > 1 ? `确认删除所选 ${selectedCount} 行？` : "确认删除此行？"}
+                </span>
                 <button
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => { setConfirmDelete(false); onDelete(); }}
@@ -2006,7 +2023,7 @@ function ScriptBlock({
             ) : (
               <button
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => { if (isEmptyForDelete) onDelete(); else setConfirmDelete(true); }}
+                onClick={() => { if (canDeleteWithoutConfirmation) onDelete(); else setConfirmDelete(true); }}
                 className="flex h-4 w-4 items-center justify-center rounded text-[12px] leading-none text-zinc-300 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover:opacity-100"
                 title="删除此行"
                 aria-label="删除此行"
@@ -2022,7 +2039,10 @@ function ScriptBlock({
               onDragStart={onDragStartBlock}
               onDragEnd={onDragEndBlock}
               onMouseDown={(e) => e.stopPropagation()}
-              className="absolute left-0 top-[calc(50%-2px)] h-[max(1.5rem,calc(100%-3rem))] w-4 -translate-y-1/2 cursor-grab rounded text-zinc-200 opacity-0 transition-all hover:bg-[#dbe5f3] hover:text-[#91a8ca] group-hover:opacity-100 active:cursor-grabbing"
+              onClick={onToggleSelected}
+              className={`absolute left-0 top-[calc(50%-2px)] h-[max(1.5rem,calc(100%-3rem))] w-4 -translate-y-1/2 cursor-grab rounded opacity-0 transition-all hover:bg-[#dbe5f3] hover:text-[#91a8ca] group-hover:opacity-100 active:cursor-grabbing ${
+                isSelected ? "bg-[#dbe5f3] text-[#91a8ca] opacity-100" : "text-zinc-200"
+              }`}
               title="拖动调整位置"
               aria-label="拖动调整位置"
             >
@@ -2054,9 +2074,40 @@ function ScriptBlock({
 
       {/* Right-side action buttons — flex row, no overlap */}
       <div className={`absolute right-2 top-1 flex items-center transition-opacity ${charSelectorOpen ? "opacity-0 pointer-events-none" : ""}`}>
+        {confirmTypeAction && (
+          <span className="z-10 mr-1 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm">
+            <span className="whitespace-nowrap text-[10px] text-zinc-400">
+              {confirmTypeAction === "type"
+                ? `确认修改所选 ${selectedCount} 行类型？`
+                : `确认修改所选 ${selectedCount} 行文本状态？`}
+            </span>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const action = confirmTypeAction;
+                setConfirmTypeAction(null);
+                if (action === "type") onToggleType();
+                else onToggleLyric();
+              }}
+              className="text-[10px] text-red-500 hover:text-red-700"
+            >
+              确认
+            </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setConfirmTypeAction(null)}
+              className="text-[10px] text-zinc-400 hover:text-zinc-600"
+            >
+              取消
+            </button>
+          </span>
+        )}
         {canEditText && !isStage && !hasLyricConfig && (
           <button
-            onClick={onToggleLyric}
+            onClick={() => {
+              if (selectedCount > 1) setConfirmTypeAction("lyric");
+              else onToggleLyric();
+            }}
             className="rounded px-1.5 py-0.5 text-[11px] text-zinc-200 opacity-0 transition-opacity hover:text-zinc-400 group-hover:opacity-100"
           >
             {block.lyric ? "台词" : "歌词"}
@@ -2074,7 +2125,10 @@ function ScriptBlock({
         )}
         {canEditText && (
           <button
-            onClick={onToggleType}
+            onClick={() => {
+              if (selectedCount > 1) setConfirmTypeAction("type");
+              else onToggleType();
+            }}
             className="rounded px-1.5 py-0.5 text-[11px] text-zinc-200 opacity-0 transition-opacity hover:text-zinc-400 group-hover:opacity-100"
           >
             {isStage ? "台词" : "舞台"}
@@ -2514,6 +2568,7 @@ export default function ScriptEditor({
   const focusedIdRef = useRef<string | null>(null);
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
+  const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(() => new Set());
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollLockedRef = useRef(true);
   const [charEditTokens, setCharEditTokens] = useState<Record<string, number>>({});
@@ -2572,6 +2627,7 @@ export default function ScriptEditor({
   const pendingFocus = useRef<{ id: string; textOffset?: number; atEnd?: boolean } | null>(null);
   const pendingCharOpen = useRef<string | null>(null);
   const draggingBlockId = useRef<string | null>(null);
+  const draggingBlockIds = useRef<string[]>([]);
   const blocksRef = useRef(blocks);
   const prevBlocksLengthRef = useRef(blocks.length);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
@@ -3407,6 +3463,28 @@ export default function ScriptEditor({
     ));
   }, [saveSnapshot]);
 
+  const setBlocksType = useCallback((ids: string[], type: BlockType) => {
+    const targetIds = new Set(ids);
+    if (targetIds.size === 0) return;
+    saveSnapshot();
+    setBlocks((prev) => prev.map((b) =>
+      targetIds.has(b.id)
+        ? { ...b, type, characterIds: type === "stage" ? [] : b.characterIds }
+        : b
+    ));
+  }, [saveSnapshot]);
+
+  const setBlocksLyric = useCallback((ids: string[], lyric: boolean) => {
+    const targetIds = new Set(ids);
+    if (targetIds.size === 0) return;
+    saveSnapshot();
+    setBlocks((prev) => prev.map((b) =>
+      targetIds.has(b.id) && b.type !== "stage"
+        ? { ...b, lyric }
+        : b
+    ));
+  }, [saveSnapshot]);
+
   // Apply pending focus on every render until resolved
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -3538,6 +3616,39 @@ export default function ScriptEditor({
     });
   }, [saveSnapshot]);
 
+  const deleteBlocks = useCallback((ids: string[]) => {
+    const deleteIds = new Set(ids);
+    if (deleteIds.size === 0) return;
+    saveSnapshot();
+    setBlocks((prev) => {
+      if (prev.length <= 1) return prev;
+      const remaining = prev.filter((b) => !deleteIds.has(b.id));
+      if (remaining.length === prev.length || remaining.length === 0) return prev;
+      const firstDeletedIdx = prev.findIndex((b) => deleteIds.has(b.id));
+      const focusIdx = Math.min(firstDeletedIdx, remaining.length - 1);
+      pendingFocus.current = { id: remaining[focusIdx].id, atEnd: false };
+      return remaining;
+    });
+    setSelectedBlockIds((current) => {
+      const next = new Set(current);
+      for (const id of deleteIds) next.delete(id);
+      return next;
+    });
+  }, [saveSnapshot]);
+
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isEditingTarget = !!target?.closest("input, textarea, [contenteditable='true']");
+      if (isEditingTarget || selectedBlockIds.size === 0) return;
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      e.preventDefault();
+      deleteBlocks(Array.from(selectedBlockIds));
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [deleteBlocks, selectedBlockIds]);
+
   const moveBlock = useCallback((fromId: string, target: DragTarget) => {
     const { id: toId, position } = target;
     if (fromId === toId) return;
@@ -3558,6 +3669,34 @@ export default function ScriptEditor({
         rehearsalMark: ref?.rehearsalMark ?? null,
       });
       pendingFocus.current = { id: moved.id, atEnd: false };
+      return next;
+    });
+  }, [saveSnapshot]);
+
+  const moveBlocks = useCallback((fromIds: string[], target: DragTarget) => {
+    const movingIds = new Set(fromIds);
+    if (movingIds.size === 0 || movingIds.has(target.id)) return;
+    saveSnapshot();
+    setBlocks((prev) => {
+      const toIdx = prev.findIndex((b) => b.id === target.id);
+      if (toIdx === -1) return prev;
+
+      const moving = prev.filter((b) => movingIds.has(b.id));
+      if (moving.length === 0) return prev;
+
+      const remaining = prev.filter((b) => !movingIds.has(b.id));
+      const targetIdx = remaining.findIndex((b) => b.id === target.id);
+      if (targetIdx === -1) return prev;
+      const insertIdx = target.position === "before" ? targetIdx : targetIdx + 1;
+      const ref = insertIdx > 0 ? remaining[insertIdx - 1] : null;
+      const moved = moving.map((b) => ({
+        ...b,
+        sceneId: ref?.sceneId ?? null,
+        rehearsalMark: ref?.rehearsalMark ?? null,
+      }));
+      const next = [...remaining];
+      next.splice(insertIdx, 0, ...moved);
+      pendingFocus.current = { id: moved[0].id, atEnd: false };
       return next;
     });
   }, [saveSnapshot]);
@@ -4134,6 +4273,13 @@ export default function ScriptEditor({
             const matchOrder = searchMatches.indexOf(bIdx);
             const searchHighlight: "focused" | "match" | undefined =
               matchOrder === searchIdx ? "focused" : matchOrder >= 0 ? "match" : undefined;
+            const isSelected = selectedBlockIds.has(block.id);
+            const selectedDeleteIds = isSelected ? Array.from(selectedBlockIds) : [block.id];
+            const selectedCount = selectedDeleteIds.length;
+            const canDeleteWithoutConfirmation = selectedDeleteIds.every((id) => {
+              const selectedBlock = blocks.find((b) => b.id === id);
+              return selectedBlock ? isBlockEmptyForDelete(selectedBlock) : false;
+            });
             const canMergeWithPrevious = !!(
               prev &&
               prev.type === block.type &&
@@ -4215,6 +4361,9 @@ export default function ScriptEditor({
                   hideCharSelector={hideCharSelector}
                   isFocused={focusedId === block.id}
                   dragTarget={dragTarget?.id === block.id ? dragTarget : null}
+                  isSelected={isSelected}
+                  selectedCount={selectedCount}
+                  canDeleteWithoutConfirmation={canDeleteWithoutConfirmation}
                   charEditToken={charEditTokens[block.id] ?? 0}
                   presenceEditors={Array.from(presenceMap.values()).filter(
                     p => p.blockId === block.id && p.clientId !== clientId
@@ -4223,29 +4372,55 @@ export default function ScriptEditor({
                   onUpdate={(changes) => updateBlock(block.id, changes)}
                   onSplit={(before, after) => splitBlock(block.id, before, after)}
                   onMerge={() => mergeBlock(block.id)}
-                  onDelete={() => deleteBlock(block.id)}
+                  onDelete={() => {
+                    if (selectedDeleteIds.length > 1) deleteBlocks(selectedDeleteIds);
+                    else deleteBlock(block.id);
+                  }}
                   onFocus={() => { setFocusedId(block.id); sendPresence(block.id); }}
-                  onToggleType={() => toggleBlockType(block.id)}
-                  onToggleLyric={() => toggleBlockLyric(block.id)}
+                  onToggleType={() => {
+                    if (isSelected && selectedDeleteIds.length > 1) {
+                      setBlocksType(selectedDeleteIds, block.type === "stage" ? "dialogue" : "stage");
+                    } else {
+                      toggleBlockType(block.id);
+                    }
+                  }}
+                  onToggleLyric={() => {
+                    if (isSelected && selectedDeleteIds.length > 1) {
+                      setBlocksLyric(selectedDeleteIds, !block.lyric);
+                    } else {
+                      toggleBlockLyric(block.id);
+                    }
+                  }}
                   onArrowUpFromChar={() => handleArrowUpFromChar(block.id)}
                   onArrowDownFromChar={() => handleArrowDownFromChar(block.id)}
                   onArrowUpFromTextarea={() => handleArrowUpFromTextarea(block.id)}
                   onArrowDownFromTextarea={() => handleArrowDownFromTextarea(block.id)}
                   onSceneChange={(id) => updateBlockScene(block.id, id)}
                   onMarkChange={(m) => updateBlockMark(block.id, m)}
+                  onToggleSelected={() => {
+                    setSelectedBlockIds((current) => {
+                      const next = new Set(current);
+                      if (next.has(block.id)) next.delete(block.id);
+                      else next.add(block.id);
+                      return next;
+                    });
+                  }}
                   onDragStartBlock={(e) => {
+                    const ids = selectedBlockIds.has(block.id) ? Array.from(selectedBlockIds) : [block.id];
                     draggingBlockId.current = block.id;
+                    draggingBlockIds.current = ids;
                     setDragTarget(null);
                     e.dataTransfer.effectAllowed = "move";
-                    e.dataTransfer.setData("text/plain", block.id);
+                    e.dataTransfer.setData("text/plain", ids.join(","));
                   }}
                   onDragEndBlock={() => {
                     draggingBlockId.current = null;
+                    draggingBlockIds.current = [];
                     setDragTarget(null);
                   }}
                   onDragOverBlock={(e) => {
                     if (!draggingBlockId.current) return;
-                    if (draggingBlockId.current === block.id) {
+                    if (draggingBlockIds.current.includes(block.id)) {
                       setDragTarget(null);
                       return;
                     }
@@ -4255,7 +4430,7 @@ export default function ScriptEditor({
                     const wantsAfter = e.clientY >= rect.top + rect.height / 2;
                     const position = wantsAfter && bIdx === blocks.length - 1 ? "after" : "before";
                     const targetId = wantsAfter && bIdx < blocks.length - 1 ? blocks[bIdx + 1].id : block.id;
-                    if (draggingBlockId.current === targetId) {
+                    if (draggingBlockIds.current.includes(targetId)) {
                       setDragTarget(null);
                       return;
                     }
@@ -4267,15 +4442,19 @@ export default function ScriptEditor({
                   }}
                   onDropBlock={(e) => {
                     e.preventDefault();
-                    const fromId = draggingBlockId.current ?? e.dataTransfer.getData("text/plain");
+                    const draggedIds = draggingBlockIds.current.length
+                      ? draggingBlockIds.current
+                      : e.dataTransfer.getData("text/plain").split(",").filter(Boolean);
                     const rect = e.currentTarget.getBoundingClientRect();
                     const wantsAfter = e.clientY >= rect.top + rect.height / 2;
                     const position = wantsAfter && bIdx === blocks.length - 1 ? "after" : "before";
                     const targetId = wantsAfter && bIdx < blocks.length - 1 ? blocks[bIdx + 1].id : block.id;
                     const target: DragTarget = { id: targetId, position };
                     draggingBlockId.current = null;
+                    draggingBlockIds.current = [];
                     setDragTarget(null);
-                    if (fromId && fromId !== target.id) moveBlock(fromId, target);
+                    if (draggedIds.length > 1) moveBlocks(draggedIds, target);
+                    else if (draggedIds[0] && draggedIds[0] !== target.id) moveBlock(draggedIds[0], target);
                   }}
                   isMarkStart={isMarkStart}
                   commentCount={comments.filter(c => c.contextId === block.id).length}
