@@ -1099,31 +1099,37 @@ function BlockCharacterSelector({
             >×</button>
           </span>
         ))}
-        <input
-          ref={inputRef}
-          autoFocus
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setHighlightIdx(0); }}
-          onKeyDown={handleKeyDown}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData("text/plain");
-            const matches = text
-              .split(/[、，,\n]+/)
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .flatMap((name) => {
-                const c = characters.find((c) => c.name === name && !block.characterIds.includes(c.id));
-                return c ? [c.id] : [];
-              });
-            if (matches.length > 0) {
-              e.preventDefault();
-              onChange([...block.characterIds, ...matches]);
-            }
-            // No matches → let default paste fill the search query
-          }}
-          placeholder={selected.length === 0 ? "搜索角色…" : ""}
-          className="min-w-[5rem] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-300"
-        />
+        {characters.length === 0 ? (
+          <p className="min-w-[12rem] flex-1 text-left text-xs leading-5 text-zinc-400">
+            当前版本尚无任何角色。请通过【戏剧构作】—【角色】进行添加。
+          </p>
+        ) : (
+          <input
+            ref={inputRef}
+            autoFocus
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setHighlightIdx(0); }}
+            onKeyDown={handleKeyDown}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData("text/plain");
+              const matches = text
+                .split(/[、，,\n]+/)
+                .map((s) => s.trim())
+                .filter(Boolean)
+                .flatMap((name) => {
+                  const c = characters.find((c) => c.name === name && !block.characterIds.includes(c.id));
+                  return c ? [c.id] : [];
+                });
+              if (matches.length > 0) {
+                e.preventDefault();
+                onChange([...block.characterIds, ...matches]);
+              }
+              // No matches → let default paste fill the search query
+            }}
+            placeholder={selected.length === 0 ? "搜索角色…" : ""}
+            className="min-w-[5rem] flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-300"
+          />
+        )}
         {selected.length > 0 && (
           <button
             onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setShowAnnotations((v) => !v); }}
