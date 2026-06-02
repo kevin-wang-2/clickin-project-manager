@@ -1794,6 +1794,7 @@ function ScriptBlock({
   dragTarget = null,
   isSelected = false,
   isRecentlyMoved = false,
+  deleteConfirmToken,
   selectedCount = 0,
   dismissToken = 0,
   canDeleteWithoutConfirmation = false,
@@ -1851,6 +1852,7 @@ function ScriptBlock({
   dragTarget?: BlockDragTarget | null;
   isSelected?: boolean;
   isRecentlyMoved?: boolean;
+  deleteConfirmToken?: number;
   selectedCount?: number;
   dismissToken?: number;
   canDeleteWithoutConfirmation?: boolean;
@@ -1886,6 +1888,11 @@ function ScriptBlock({
     setConfirmDelete(false);
     setConfirmTypeAction(null);
   }, [dismissToken]);
+
+  useEffect(() => {
+    if (deleteConfirmToken === undefined) return;
+    setConfirmDelete(true);
+  }, [deleteConfirmToken]);
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
@@ -2636,6 +2643,7 @@ export default function ScriptEditor({
   const [reorderNotice, setReorderNotice] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(() => new Set());
   const [recentlyMovedBlockIds, setRecentlyMovedBlockIds] = useState<Set<string>>(() => new Set());
+  const [deleteConfirmationRequest, setDeleteConfirmationRequest] = useState<{ anchorId: string; token: number } | null>(null);
   const [dismissActionToken, setDismissActionToken] = useState(0);
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollLockedRef = useRef(true);
@@ -3046,7 +3054,7 @@ export default function ScriptEditor({
     const windowSize = Math.min(INITIAL_WINDOW_SIZE, blocks.length);
     const centerIdx = Math.max(0, Math.min(blocks.length - 1, centerTarget.index));
     let start = Math.max(0, centerIdx - Math.floor(windowSize / 2));
-    let end = Math.min(blocks.length, start + windowSize);
+    const end = Math.min(blocks.length, start + windowSize);
     start = Math.max(0, end - windowSize);
     pendingMoveCenterRef.current = null;
     const nextRange = { start, end };
@@ -3891,6 +3899,27 @@ export default function ScriptEditor({
     });
   }, [saveSnapshot]);
 
+  const requestSelectedBlocksDelete = useCallback(() => {
+    const selectedIds = Array.from(selectedBlockIds);
+    if (selectedIds.length === 0) return false;
+    const selectedIdSet = new Set(selectedIds);
+    const selectedBlocks = blocks.filter((b) => selectedIdSet.has(b.id));
+    if (selectedBlocks.length === 0) return false;
+    if (selectedBlocks.every(isBlockEmptyForDelete)) {
+      deleteBlocks(selectedIds);
+      return true;
+    }
+    const visibleAnchor = blocks
+      .slice(windowRange.start, windowRange.end)
+      .find((b) => selectedIdSet.has(b.id));
+    const anchorId = visibleAnchor?.id ?? selectedBlocks[0].id;
+    setDeleteConfirmationRequest((current) => ({
+      anchorId,
+      token: (current?.token ?? 0) + 1,
+    }));
+    return true;
+  }, [blocks, deleteBlocks, selectedBlockIds, windowRange.end, windowRange.start]);
+
   useEffect(() => {
     const handler = (e: PointerEvent) => {
       if (draggingBlockId.current || isReorderLockedRef.current) return;
@@ -3912,16 +3941,15 @@ export default function ScriptEditor({
 
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const isEditingTarget = !!target?.closest("input, textarea, [contenteditable='true']");
-      if (isEditingTarget || selectedBlockIds.size === 0) return;
       if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (!requestSelectedBlocksDelete()) return;
       e.preventDefault();
-      deleteBlocks(Array.from(selectedBlockIds));
+      e.stopPropagation();
+      clearEditorFocusForDrag();
     };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [deleteBlocks, selectedBlockIds]);
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
+  }, [clearEditorFocusForDrag, requestSelectedBlocksDelete]);
 
   const moveDraggedBlocks = useCallback((fromIds: string[], target: DragTarget): boolean => {
     const movingIds = new Set(fromIds);
@@ -4861,6 +4889,7 @@ export default function ScriptEditor({
                   dragTarget={dragTarget?.kind === "block" && dragTarget.id === block.id ? dragTarget : null}
                   isSelected={isSelected}
                   isRecentlyMoved={recentlyMovedBlockIds.has(block.id)}
+                  deleteConfirmToken={deleteConfirmationRequest?.anchorId === block.id ? deleteConfirmationRequest.token : undefined}
                   selectedCount={selectedCount}
                   canDeleteWithoutConfirmation={canDeleteWithoutConfirmation}
                   dismissToken={dismissActionToken}
