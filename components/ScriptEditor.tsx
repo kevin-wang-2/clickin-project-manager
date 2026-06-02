@@ -2605,6 +2605,7 @@ export default function ScriptEditor({
   const focusedIdRef = useRef<string | null>(null);
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
+  const dragCountBadgeRef = useRef<HTMLDivElement>(null);
   const [isScriptDragging, setIsScriptDragging] = useState(false);
   const [isReorderLocked, setIsReorderLocked] = useState(false);
   const [reorderNotice, setReorderNotice] = useState("");
@@ -2671,6 +2672,8 @@ export default function ScriptEditor({
   const draggingBlockIds = useRef<string[]>([]);
   const dragTargetRef = useRef<DragTarget | null>(null);
   const dragInvalidReasonRef = useRef<string | null>(null);
+  const dragButtonDownSeenRef = useRef(false);
+  const dragButtonReleasedRef = useRef(false);
   const dropHandledRef = useRef(false);
   const isReorderLockedRef = useRef(false);
   const windowRangeFrameRef = useRef<number | null>(null);
@@ -2686,6 +2689,46 @@ export default function ScriptEditor({
     if (windowRangeFrameRef.current !== null) cancelAnimationFrame(windowRangeFrameRef.current);
     if (reorderNoticeTimer.current !== null) clearTimeout(reorderNoticeTimer.current);
   }, []);
+
+  const clearDragCountBadge = useCallback(() => {
+    dragButtonReleasedRef.current = true;
+    dragButtonDownSeenRef.current = false;
+    const badge = dragCountBadgeRef.current;
+    if (badge) badge.hidden = true;
+  }, []);
+
+  useEffect(() => {
+    const clearIfDragButtonReleased = (event: globalThis.DragEvent) => {
+      if (event.buttons > 0) {
+        dragButtonDownSeenRef.current = true;
+        return;
+      }
+      if (!dragButtonDownSeenRef.current || event.buttons !== 0) return;
+      clearDragCountBadge();
+    };
+    document.addEventListener("drag", clearIfDragButtonReleased, true);
+    document.addEventListener("dragend", clearDragCountBadge, true);
+    document.addEventListener("dragover", clearIfDragButtonReleased, true);
+    document.addEventListener("drop", clearDragCountBadge, true);
+    document.addEventListener("pointerup", clearDragCountBadge, true);
+    document.addEventListener("mouseup", clearDragCountBadge, true);
+    window.addEventListener("drag", clearIfDragButtonReleased, true);
+    window.addEventListener("dragover", clearIfDragButtonReleased, true);
+    window.addEventListener("pointerup", clearDragCountBadge, true);
+    window.addEventListener("mouseup", clearDragCountBadge, true);
+    return () => {
+      document.removeEventListener("drag", clearIfDragButtonReleased, true);
+      document.removeEventListener("dragend", clearDragCountBadge, true);
+      document.removeEventListener("dragover", clearIfDragButtonReleased, true);
+      document.removeEventListener("drop", clearDragCountBadge, true);
+      document.removeEventListener("pointerup", clearDragCountBadge, true);
+      document.removeEventListener("mouseup", clearDragCountBadge, true);
+      window.removeEventListener("drag", clearIfDragButtonReleased, true);
+      window.removeEventListener("dragover", clearIfDragButtonReleased, true);
+      window.removeEventListener("pointerup", clearDragCountBadge, true);
+      window.removeEventListener("mouseup", clearDragCountBadge, true);
+    };
+  }, [clearDragCountBadge]);
 
   const setScriptDragging = useCallback((dragging: boolean) => {
     setIsScriptDragging((current) => current === dragging ? current : dragging);
@@ -2744,6 +2787,29 @@ export default function ScriptEditor({
   const botSpacerRef = useRef<HTMLDivElement>(null);
   const measuredHeightsRef = useRef<Map<string, number>>(new Map());
   const cumulativeHRef = useRef<number[]>([0]); // indexed 0..blocks.length
+  const updateDragCountBadge = useCallback((clientX: number, clientY: number, count: number, buttons?: number) => {
+    if (buttons !== undefined) {
+      if (buttons > 0) dragButtonDownSeenRef.current = true;
+      if (dragButtonDownSeenRef.current && buttons === 0) {
+        clearDragCountBadge();
+        return;
+      }
+    }
+    if (dragButtonReleasedRef.current || count <= 1) {
+      clearDragCountBadge();
+      return;
+    }
+    const rect = blocksContainerRef.current?.getBoundingClientRect();
+    const midpoint = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+    const side = clientX > midpoint ? "left" : "right";
+    const badge = dragCountBadgeRef.current;
+    if (!badge) return;
+    badge.textContent = String(count);
+    badge.style.left = `${side === "right" ? clientX + 16 : clientX - 16}px`;
+    badge.style.top = `${clientY}px`;
+    badge.style.transform = side === "right" ? "" : "translateX(-100%)";
+    badge.hidden = false;
+  }, [clearDragCountBadge]);
   const [windowRange, setWindowRange] = useState(() => ({ start: 0, end: Math.min(INITIAL_WINDOW_SIZE, blocks.length) }));
   const windowRangeRef = useRef(windowRange);
   useLayoutEffect(() => { windowRangeRef.current = windowRange; }, [windowRange]);
@@ -4439,6 +4505,13 @@ export default function ScriptEditor({
         </div>
       )}
 
+      <div
+        ref={dragCountBadgeRef}
+        hidden
+        className="pointer-events-none fixed z-50 rounded border bg-white/90 px-1.5 py-0.5 text-lg font-semibold leading-none tabular-nums shadow-sm"
+        style={{ borderColor: "#91a8ca", color: "#91a8ca" }}
+      />
+
       {/* Document */}
       <main className="mx-auto max-w-3xl px-4 py-8">
         <div className="relative min-h-[70vh] rounded-2xl bg-white shadow-sm flex flex-col pt-6 pb-8">
@@ -4448,6 +4521,9 @@ export default function ScriptEditor({
             onDragOver={(e) => {
               if (isReorderLockedRef.current) return;
               if (!draggingBlockId.current) return;
+              if (draggingBlockIds.current.length > 1) {
+                updateDragCountBadge(e.clientX, e.clientY, draggingBlockIds.current.length, e.buttons);
+              }
               const nextTarget = updateDragTargetFromClientY(e.clientY);
               if (!nextTarget) return;
               e.preventDefault();
@@ -4466,6 +4542,7 @@ export default function ScriptEditor({
               draggingBlockId.current = null;
               draggingBlockIds.current = [];
               dragTargetRef.current = null;
+              clearDragCountBadge();
               setScriptDragging(false);
               setDragTarget(null);
               if (!target) {
@@ -4688,6 +4765,9 @@ export default function ScriptEditor({
                     }
                     clearEditorFocusForDrag();
                     setScriptDragging(true);
+                    dragButtonDownSeenRef.current = false;
+                    dragButtonReleasedRef.current = false;
+                    updateDragCountBadge(e.clientX, e.clientY, ids.length);
                     draggingBlockId.current = block.id;
                     draggingBlockIds.current = ids;
                     dropHandledRef.current = false;
@@ -4715,6 +4795,7 @@ export default function ScriptEditor({
                     draggingBlockIds.current = [];
                     dragTargetRef.current = null;
                     dragInvalidReasonRef.current = null;
+                    clearDragCountBadge();
                     setScriptDragging(false);
                     setDragTarget(null);
                   }}
@@ -4739,6 +4820,7 @@ export default function ScriptEditor({
                     draggingBlockId.current = null;
                     draggingBlockIds.current = [];
                     dragTargetRef.current = null;
+                    clearDragCountBadge();
                     setScriptDragging(false);
                     setDragTarget(null);
                     if (!target) {
