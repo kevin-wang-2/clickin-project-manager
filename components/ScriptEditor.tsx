@@ -1755,6 +1755,7 @@ function ScriptBlock({
   dragTarget = null,
   isSelected = false,
   selectedCount = 0,
+  dismissToken = 0,
   canDeleteWithoutConfirmation = false,
   index = 0,
   lineNum,
@@ -1808,6 +1809,7 @@ function ScriptBlock({
   dragTarget?: DragTarget | null;
   isSelected?: boolean;
   selectedCount?: number;
+  dismissToken?: number;
   canDeleteWithoutConfirmation?: boolean;
   index?: number;
   lineNum?: number;
@@ -1834,6 +1836,11 @@ function ScriptBlock({
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmTypeAction, setConfirmTypeAction] = useState<"type" | "lyric" | null>(null);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+    setConfirmTypeAction(null);
+  }, [dismissToken]);
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
@@ -2001,7 +2008,7 @@ function ScriptBlock({
 
           {( /* `91a8ca` is my signature color (lighter version). ^v^ -- QPT */
             confirmDelete ? (
-              <span className="absolute left-0 bottom-0 z-10 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm">
+              <span className="absolute left-0 bottom-0 z-10 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm" data-script-confirmation="true">
                 <span className="whitespace-nowrap text-[10px] text-zinc-400">
                   {selectedCount > 1 ? `确认删除所选 ${selectedCount} 行？` : "确认删除此行？"}
                 </span>
@@ -2022,6 +2029,7 @@ function ScriptBlock({
               </span>
             ) : (
               <button
+                data-script-selection-action={selectedCount > 1 ? "true" : undefined}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => { if (canDeleteWithoutConfirmation) onDelete(); else setConfirmDelete(true); }}
                 className="flex h-4 w-4 items-center justify-center rounded text-[12px] leading-none text-zinc-300 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover:opacity-100"
@@ -2036,6 +2044,7 @@ function ScriptBlock({
           {(
             <button
               draggable
+              data-script-block-bar="true"
               onDragStart={onDragStartBlock}
               onDragEnd={onDragEndBlock}
               onMouseDown={(e) => e.stopPropagation()}
@@ -2075,7 +2084,7 @@ function ScriptBlock({
       {/* Right-side action buttons — flex row, no overlap */}
       <div className={`absolute right-2 top-1 flex items-center transition-opacity ${charSelectorOpen ? "opacity-0 pointer-events-none" : ""}`}>
         {confirmTypeAction && (
-          <span className="z-10 mr-1 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm">
+          <span className="z-10 mr-1 flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm" data-script-confirmation="true">
             <span className="whitespace-nowrap text-[10px] text-zinc-400">
               {confirmTypeAction === "type"
                 ? `确认修改所选 ${selectedCount} 行类型？`
@@ -2104,6 +2113,7 @@ function ScriptBlock({
         )}
         {canEditText && !isStage && !hasLyricConfig && (
           <button
+            data-script-selection-action={selectedCount > 1 ? "true" : undefined}
             onClick={() => {
               if (selectedCount > 1) setConfirmTypeAction("lyric");
               else onToggleLyric();
@@ -2125,6 +2135,7 @@ function ScriptBlock({
         )}
         {canEditText && (
           <button
+            data-script-selection-action={selectedCount > 1 ? "true" : undefined}
             onClick={() => {
               if (selectedCount > 1) setConfirmTypeAction("type");
               else onToggleType();
@@ -2569,6 +2580,7 @@ export default function ScriptEditor({
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(() => new Set());
+  const [dismissActionToken, setDismissActionToken] = useState(0);
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollLockedRef = useRef(true);
   const [charEditTokens, setCharEditTokens] = useState<Record<string, number>>({});
@@ -3637,6 +3649,20 @@ export default function ScriptEditor({
   }, [saveSnapshot]);
 
   useEffect(() => {
+    const handler = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest("[data-script-confirmation='true']")) return;
+      if (target.closest("[data-script-block-bar='true']")) return;
+      if (target.closest("[data-script-selection-action='true']")) return;
+      setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
+      setDismissActionToken((token) => token + 1);
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, []);
+
+  useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const isEditingTarget = !!target?.closest("input, textarea, [contenteditable='true']");
@@ -4364,6 +4390,7 @@ export default function ScriptEditor({
                   isSelected={isSelected}
                   selectedCount={selectedCount}
                   canDeleteWithoutConfirmation={canDeleteWithoutConfirmation}
+                  dismissToken={dismissActionToken}
                   charEditToken={charEditTokens[block.id] ?? 0}
                   presenceEditors={Array.from(presenceMap.values()).filter(
                     p => p.blockId === block.id && p.clientId !== clientId
