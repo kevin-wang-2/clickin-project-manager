@@ -28,11 +28,12 @@ interface Props {
   // compact: single-line chip list (for inline use in lists)
   // panel: full vertical list with add button below
   display?: "compact" | "panel";
+  onNavigate?: () => void;
 }
 
 export default function MountPointAssets({
   productionId, mountType, mountId, mountAuxId, versionId, stableId,
-  label, canEdit = false, display = "panel",
+  label, canEdit = false, display = "panel", onNavigate,
 }: Props) {
   const [results, setResults] = useState<MountResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +79,7 @@ export default function MountPointAssets({
             className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] text-zinc-600">
             <Link
               href={assetHref(asset)}
+              onNavigate={onNavigate}
               target={asset.storageType === "feishu_link" ? "_blank" : undefined}
               className="hover:text-zinc-900 truncate max-w-[120px]"
             >
@@ -131,6 +133,7 @@ export default function MountPointAssets({
               <div className="min-w-0 flex-1">
                 <Link
                   href={assetHref(asset)}
+                  onNavigate={onNavigate}
                   target={asset.storageType === "feishu_link" ? "_blank" : undefined}
                   className="block text-xs font-medium text-zinc-700 hover:text-zinc-900 truncate"
                 >

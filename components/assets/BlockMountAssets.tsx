@@ -14,9 +14,10 @@ interface Props {
   label: string;
   canEdit?: boolean;
   display?: "compact" | "panel";
+  onNavigate?: () => void;
 }
 
-export default function BlockMountAssets({ productionId, blockId, versionId, label, canEdit, display }: Props) {
+export default function BlockMountAssets({ productionId, blockId, versionId, label, canEdit, display, onNavigate }: Props) {
   const [resolved, setResolved] = useState<{ mountType: "block_snapshot" | "block"; mountId: string } | null>(null);
 
   useEffect(() => {
@@ -46,6 +47,7 @@ export default function BlockMountAssets({ productionId, blockId, versionId, lab
       label={label}
       canEdit={canEdit}
       display={display}
+      onNavigate={onNavigate}
     />
   );
 }

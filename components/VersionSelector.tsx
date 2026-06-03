@@ -25,10 +25,11 @@ interface Props {
   currentVersionId: string | null;
   canManage?: boolean;
   onChange: (versionId: string) => void;
+  onNavigate?: () => void;
 }
 
 export default function VersionSelector({
-  productionId, versions, currentVersionId, canManage, onChange,
+  productionId, versions, currentVersionId, canManage, onChange, onNavigate,
 }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -103,6 +104,7 @@ export default function VersionSelector({
               <Link
                 href={`/production/${productionId}/versions`}
                 onClick={() => setOpen(false)}
+                onNavigate={onNavigate}
                 className="flex items-center gap-2 px-3 py-2 text-sm text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 transition-colors"
               >
                 管理版本…
