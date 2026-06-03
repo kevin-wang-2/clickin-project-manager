@@ -1852,7 +1852,7 @@ function ScriptBlock({
   onDragEndBlock: () => void;
   onDragOverBlock: (e: DragEvent<HTMLDivElement>) => void;
   onDropBlock: (e: DragEvent<HTMLDivElement>) => void;
-  onToggleSelected: () => void;
+  onToggleSelected: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onDeleteConfirmationChange: (active: boolean) => void;
   isMarkStart: boolean;
   commentCount: number;
@@ -2181,9 +2181,12 @@ function ScriptBlock({
               data-script-block-bar="true"
               onDragStart={onDragStartBlock}
               onDragEnd={onDragEndBlock}
-              onMouseDown={(e) => e.stopPropagation()}
+              onMouseDown={(e) => {
+                if (e.shiftKey) e.preventDefault();
+                e.stopPropagation();
+              }}
               onClick={onToggleSelected}
-              className={`absolute left-0 top-[calc(50%-2px)] h-[max(1.5rem,calc(100%-3rem))] w-4 -translate-y-1/2 rounded opacity-0 transition-all group-hover:opacity-100 ${
+              className={`absolute left-0 top-[calc(50%-2px)] h-[max(1.5rem,calc(100%-3rem))] w-4 -translate-y-1/2 select-none rounded opacity-0 outline-none transition-all focus:outline-none focus-visible:outline-none group-hover:opacity-100 ${
                 isReorderLocked
                   ? "cursor-not-allowed text-zinc-200 opacity-40"
                   : `cursor-grab hover:bg-[#dbe5f3] hover:text-[#91a8ca] active:cursor-grabbing ${
@@ -2723,6 +2726,9 @@ export default function ScriptEditor({
   const [isReorderLocked, setIsReorderLocked] = useState(false);
   const [reorderNotice, setReorderNotice] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(() => new Set());
+  const selectionAnchorBlockIdRef = useRef<string | null>(null);
+  const rangeSelectionActiveRef = useRef(false);
+  const [shiftKeyDown, setShiftKeyDown] = useState(false);
   const [recentlyMovedBlockIds, setRecentlyMovedBlockIds] = useState<Set<string>>(() => new Set());
   const [deleteConfirmationRequest, setDeleteConfirmationRequest] = useState<{ anchorId: string; token: number } | null>(null);
   const [deleteConfirmingBlockIds, setDeleteConfirmingBlockIds] = useState<Set<string>>(() => new Set());
@@ -3814,6 +3820,8 @@ export default function ScriptEditor({
         ? { ...b, type, characterIds: type === "stage" ? [] : b.characterIds }
         : b
     ));
+    selectionAnchorBlockIdRef.current = null;
+    rangeSelectionActiveRef.current = false;
     setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
   }, [saveSnapshot]);
 
@@ -3826,6 +3834,8 @@ export default function ScriptEditor({
         ? { ...b, lyric }
         : b
     ));
+    selectionAnchorBlockIdRef.current = null;
+    rangeSelectionActiveRef.current = false;
     setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
   }, [saveSnapshot]);
 
@@ -3959,6 +3969,10 @@ export default function ScriptEditor({
       if (nextFocus) pendingFocus.current = { id: nextFocus.id, atEnd: false };
       return prev.filter((b) => b.id !== id);
     });
+    if (selectionAnchorBlockIdRef.current === id) {
+      selectionAnchorBlockIdRef.current = null;
+      rangeSelectionActiveRef.current = false;
+    }
   }, [saveSnapshot]);
 
   const deleteBlocks = useCallback((ids: string[]) => {
@@ -3979,6 +3993,10 @@ export default function ScriptEditor({
       for (const id of deleteIds) next.delete(id);
       return next;
     });
+    if (selectionAnchorBlockIdRef.current && deleteIds.has(selectionAnchorBlockIdRef.current)) {
+      selectionAnchorBlockIdRef.current = null;
+      rangeSelectionActiveRef.current = false;
+    }
   }, [saveSnapshot]);
 
   const requestSelectedBlocksDelete = useCallback(() => {
@@ -4018,6 +4036,8 @@ export default function ScriptEditor({
         return;
       }
       if (selectedBlockIds.size > 0) {
+        selectionAnchorBlockIdRef.current = null;
+        rangeSelectionActiveRef.current = false;
         setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
       }
       setDeleteConfirmingBlockIds((current) => current.size === 0 ? current : new Set());
@@ -4038,6 +4058,21 @@ export default function ScriptEditor({
     document.addEventListener("keydown", handler, true);
     return () => document.removeEventListener("keydown", handler, true);
   }, [clearEditorFocusForDrag, requestSelectedBlocksDelete]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Shift") setShiftKeyDown(true);
+    };
+    const handleKeyUp = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Shift") setShiftKeyDown(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keyup", handleKeyUp);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
 
   const moveDraggedBlocks = useCallback((fromIds: string[], target: DragTarget): boolean => {
     const movingIds = new Set(fromIds);
@@ -4094,6 +4129,8 @@ export default function ScriptEditor({
       movedHighlightTimer.current = null;
       setRecentlyMovedBlockIds(new Set());
     }, 1000);
+    selectionAnchorBlockIdRef.current = moving[0]?.id ?? null;
+    rangeSelectionActiveRef.current = false;
     setSelectedBlockIds(new Set(moving.map((b) => b.id)));
     unlockReorderAfterCommit();
     return true;
@@ -4323,6 +4360,9 @@ export default function ScriptEditor({
 
   const selectionNotice = selectedBlockIds.size > 1
     ? `已选中 ${selectedBlockIds.size} 行`
+    : "";
+  const shiftSelectionNotice = shiftKeyDown && selectedBlockIds.size > 0
+    ? "连续多选模式"
     : "";
   const edgeDragNotice = dragTarget?.kind === "edge"
     ? (dragTarget.edge === "top"
@@ -4733,8 +4773,8 @@ export default function ScriptEditor({
         </div>
       )}
 
-      {(dragInstructionNotice || reorderNotice || selectionNotice) && (
-        <div className="pointer-events-none fixed left-1/2 top-20 z-50 -translate-x-1/2">
+      {(dragInstructionNotice || reorderNotice || shiftSelectionNotice || selectionNotice) && (
+        <div className="pointer-events-none fixed left-1/2 top-20 z-50 flex -translate-x-1/2 flex-col items-center gap-1">
           {dragInstructionNotice ? (
             <div className="rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-white shadow-sm">
               {dragInstructionNotice}
@@ -4744,9 +4784,18 @@ export default function ScriptEditor({
               {reorderNotice}
             </div>
           ) : (
-            <div className="rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-white shadow-sm">
-              {selectionNotice}
-            </div>
+            <>
+              {selectionNotice && (
+                <div className="rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-white shadow-sm">
+                  {selectionNotice}
+                </div>
+              )}
+              {shiftSelectionNotice && (
+                <div className="rounded bg-zinc-900/80 px-2 py-1 text-[11px] text-white shadow-sm">
+                  {shiftSelectionNotice}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -5017,14 +5066,57 @@ export default function ScriptEditor({
                   onArrowDownFromTextarea={() => handleArrowDownFromTextarea(block.id)}
                   onSceneChange={(id) => updateBlockScene(block.id, id)}
                   onMarkChange={(m) => updateBlockMark(block.id, m)}
-                  onToggleSelected={() => {
+                  onToggleSelected={(e) => {
                     if (isReorderLockedRef.current) return;
-                    setSelectedBlockIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(block.id)) next.delete(block.id);
-                      else next.add(block.id);
-                      return next;
-                    });
+                    const isAdditiveSelection = e.ctrlKey || e.metaKey;
+                    if (e.shiftKey) {
+                      const anchorId = selectionAnchorBlockIdRef.current;
+                      const anchorIdx = anchorId ? blocks.findIndex((b) => b.id === anchorId) : -1;
+                      const start = anchorIdx === -1 ? bIdx : Math.min(anchorIdx, bIdx);
+                      const end = anchorIdx === -1 ? bIdx : Math.max(anchorIdx, bIdx);
+                      const rangeIds = blocks.slice(start, end + 1).map((b) => b.id);
+                      if (anchorIdx === -1) selectionAnchorBlockIdRef.current = block.id;
+                      rangeSelectionActiveRef.current = true;
+                      if (isAdditiveSelection) {
+                        setSelectedBlockIds((current) => {
+                          const next = new Set(current);
+                          for (const id of rangeIds) next.add(id);
+                          return next;
+                        });
+                      } else {
+                        setSelectedBlockIds(new Set(rangeIds));
+                      }
+                      return;
+                    }
+                    if (isAdditiveSelection) {
+                      selectionAnchorBlockIdRef.current = block.id;
+                      setSelectedBlockIds((current) => {
+                        if (current.has(block.id)) return current;
+                        const next = new Set(current);
+                        next.add(block.id);
+                        return next;
+                      });
+                      return;
+                    }
+                    if (rangeSelectionActiveRef.current) {
+                      rangeSelectionActiveRef.current = false;
+                      selectionAnchorBlockIdRef.current = block.id;
+                      setSelectedBlockIds(new Set([block.id]));
+                    } else {
+                      setSelectedBlockIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(block.id)) {
+                          next.delete(block.id);
+                          if (selectionAnchorBlockIdRef.current === block.id) {
+                            selectionAnchorBlockIdRef.current = next.values().next().value ?? null;
+                          }
+                        } else {
+                          next.add(block.id);
+                          selectionAnchorBlockIdRef.current = block.id;
+                        }
+                        return next;
+                      });
+                    }
                   }}
                   onDeleteConfirmationChange={(active) => {
                     setDeleteConfirmingBlockIds((current) => {
@@ -5041,6 +5133,8 @@ export default function ScriptEditor({
                     const ids = isDraggingSelection ? Array.from(selectedBlockIds) : [block.id];
                     if (!isDraggingSelection && selectedBlockIds.size > 0) {
                       const emptySelection = new Set<string>();
+                      selectionAnchorBlockIdRef.current = null;
+                      rangeSelectionActiveRef.current = false;
                       setSelectedBlockIds(emptySelection);
                       setDeleteConfirmingBlockIds((current) => current.size === 0 ? current : new Set());
                       setDismissActionToken((token) => token + 1);
