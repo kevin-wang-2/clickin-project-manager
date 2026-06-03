@@ -2150,10 +2150,12 @@ function ScriptBlock({
   const [scenePickerOpen, setScenePickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmTypeAction, setConfirmTypeAction] = useState<"type" | "lyric" | null>(null);
+  const [unfoldForCompactControls, setUnfoldForCompactControls] = useState(false);
   const [compactControlLayout, setCompactControlLayout] = useState<{
     deleteLeft: number | null;
     contentPaddingLeft: number | null;
     compact: boolean;
+    hoverWidth: number;
     mode: "stage" | "hidden-character";
   } | null>(null);
 
@@ -2176,8 +2178,20 @@ function ScriptBlock({
   );
 
   const isStage = block.type === "stage";
-  const hiddenCharacterCompactCandidate = !isStage && hideCharSelector && !isFocused && !isSelected;
-  const shouldMeasureCompactControls = canEditText && (isStage || hiddenCharacterCompactCandidate);
+  const hiddenCharacterCollapsed = !isStage && hideCharSelector && !isFocused && !isSelected;
+  const effectiveHideCharSelector = hideCharSelector && !(hiddenCharacterCollapsed && unfoldForCompactControls);
+  const shouldMeasureCompactControls = canEditText && (isStage || hiddenCharacterCollapsed && !unfoldForCompactControls);
+  const isCompactHiddenCharacterLayout = !!(
+    compactControlLayout?.compact && compactControlLayout.mode === "hidden-character"
+  );
+  const unfoldCompactControls = () => {
+    if (hiddenCharacterCollapsed && isCompactHiddenCharacterLayout && !unfoldForCompactControls) {
+      setUnfoldForCompactControls(true);
+    }
+  };
+  const resetCompactControlHover = () => {
+    if (unfoldForCompactControls) setUnfoldForCompactControls(false);
+  };
 
   useLayoutEffect(() => {
     if (!shouldMeasureCompactControls) {
@@ -2208,6 +2222,7 @@ function ScriptBlock({
       const measuredDeleteLeft = triangleRect.left - railRect.left + COMPACT_STAGE_DELETE_SHIFT_PX;
       const deleteLeft = isCompactBlock ? measuredDeleteLeft : null;
       const controlRight = Math.max(triangleRect.right, railRect.left + measuredDeleteLeft + 16);
+      const hoverWidth = Math.max(16, Math.ceil(controlRight - railRect.left));
       const contentPaddingLeft = (() => {
         if (mode !== "stage" || !contentEl) return null;
         const contentRect = contentEl.getBoundingClientRect();
@@ -2219,6 +2234,7 @@ function ScriptBlock({
           prev &&
           prev.compact === isCompactBlock &&
           prev.mode === mode &&
+          Math.abs(prev.hoverWidth - hoverWidth) < 0.5 &&
           (prev.deleteLeft === null && deleteLeft === null ||
             prev.deleteLeft !== null && deleteLeft !== null && Math.abs(prev.deleteLeft - deleteLeft) < 0.5) &&
           (prev.contentPaddingLeft === null && contentPaddingLeft === null ||
@@ -2227,7 +2243,7 @@ function ScriptBlock({
         ) {
           return prev;
         }
-        return { deleteLeft, contentPaddingLeft, compact: isCompactBlock, mode };
+        return { deleteLeft, contentPaddingLeft, compact: isCompactBlock, hoverWidth, mode };
       });
     };
 
@@ -2379,20 +2395,21 @@ function ScriptBlock({
     ? { paddingLeft: compactControlLayout.contentPaddingLeft }
     : undefined;
   const hasReadOnlySceneLabel = !canEditMetadata && !!readOnlyScene;
-  const useCompactHiddenCharacterButtons = !!(
-    compactControlLayout?.compact && compactControlLayout.mode === "hidden-character"
-  );
+  const compactControlHoverStyle: React.CSSProperties | undefined = isCompactHiddenCharacterLayout
+    ? { width: compactControlLayout.hoverWidth }
+    : undefined;
   const rightActionRowClass = `absolute ${scenePickerOpen ? "z-40" : "z-20"} flex items-center transition-opacity ${
-    isStage || useCompactHiddenCharacterButtons ? "-top-5" : "top-1"
+    isStage || isCompactHiddenCharacterLayout ? "-top-5" : "top-1"
   } ${hasReadOnlySceneLabel ? "right-8" : "right-2"}`;
   const readOnlySceneLabelClass = `absolute right-1.5 z-10 leading-none ${
-    isStage || useCompactHiddenCharacterButtons ? "-top-5" : "top-1"
+    isStage || isCompactHiddenCharacterLayout ? "-top-5" : "top-1"
   }`;
   return (
     <div
       ref={blockRootRef}
       onDragOver={onDragOverBlock}
       onDrop={onDropBlock}
+      onMouseLeave={resetCompactControlHover}
       className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass} ${movedGlowClass}`}
     >
       {dragTarget && (
@@ -2412,7 +2429,10 @@ function ScriptBlock({
             </span>
           )}
           {canEditRehearsalMark && (
-            <span className={`relative top-[1px] transition-opacity ${isMarkStart && block.rehearsalMark && showRehearsalMark ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+            <span
+              onMouseEnter={unfoldCompactControls}
+              className={`relative top-[1px] transition-opacity ${isMarkStart && block.rehearsalMark && showRehearsalMark ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+            >
               <RehearsalMarkInput
                 mark={block.rehearsalMark}
                 onChange={onMarkChange}
@@ -2428,12 +2448,21 @@ function ScriptBlock({
       )}
 
       {canEditText && (
-        <div ref={leftControlsRef} className="absolute left-0 top-1 bottom-0 flex w-4 flex-col items-center justify-between">
+        <div
+          ref={leftControlsRef}
+          onMouseEnter={unfoldCompactControls}
+          style={compactControlHoverStyle}
+          className="absolute left-0 top-1 bottom-0 flex w-4 flex-col items-start justify-between"
+        >
           <span />
 
           {( /* `91a8ca` is my signature color (lighter version). ^v^ -- QPT */
             confirmDelete ? (
-              <span className="absolute left-0 bottom-0 z-10 flex translate-x-5 items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm" style={compactDeleteStyle} data-script-confirmation="true">
+              <span
+                className="absolute left-0 bottom-0 z-10 flex translate-x-5 items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm"
+                style={compactDeleteStyle}
+                data-script-confirmation="true"
+              >
                 <span className="whitespace-nowrap text-[10px] text-zinc-400">
                   {selectedCount > 1 ? `确认删除所选 ${selectedCount} 行？` : "确认删除此行？"}
                 </span>
@@ -2609,7 +2638,7 @@ function ScriptBlock({
         </span>
       )}
 
-      {!isStage && (!hideCharSelector || isFocused || isSelected) && (
+      {!isStage && (!effectiveHideCharSelector || isFocused || isSelected) && (
         <BlockCharacterSelector
           block={block}
           characters={characters}
