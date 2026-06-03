@@ -520,20 +520,26 @@ function TableOfContents({
 
   // Merge unused scenes into their correct position between used scenes.
   const orderedScenes: Scene[] = [];
+  const orderedSceneIds = new Set<string>();
+  const pushOrderedScene = (scene: Scene) => {
+    if (orderedSceneIds.has(scene.id)) return;
+    orderedSceneIds.add(scene.id);
+    orderedScenes.push(scene);
+  };
   for (let i = 0; i < usedOrdered.length; i++) {
     const prevIdx = i === 0 ? -1 : scenes.findIndex((s) => s.id === usedOrdered[i - 1].id);
     const currIdx = scenes.findIndex((s) => s.id === usedOrdered[i].id);
     for (let j = prevIdx + 1; j < currIdx; j++) {
-      if (!usedSceneIds.has(scenes[j].id)) orderedScenes.push(scenes[j]);
+      if (!usedSceneIds.has(scenes[j].id)) pushOrderedScene(scenes[j]);
     }
-    orderedScenes.push(usedOrdered[i]);
+    pushOrderedScene(usedOrdered[i]);
   }
   // Append any unused scenes that come after the last used scene.
   const lastIdx = usedOrdered.length
     ? scenes.findIndex((s) => s.id === usedOrdered[usedOrdered.length - 1].id)
     : -1;
   for (let j = lastIdx + 1; j < scenes.length; j++) {
-    if (!usedSceneIds.has(scenes[j].id)) orderedScenes.push(scenes[j]);
+    if (!usedSceneIds.has(scenes[j].id)) pushOrderedScene(scenes[j]);
   }
 
   if (orderedScenes.length === 0) return null;
