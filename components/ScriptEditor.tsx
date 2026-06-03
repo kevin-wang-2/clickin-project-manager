@@ -1346,7 +1346,7 @@ function BlockCharacterSelector({
         </div>
       )}
       {suggestions.length > 0 && (
-        <div className="absolute left-0 top-full z-10 mt-1 w-full rounded-xl border border-zinc-100 bg-white py-1 shadow-xl overflow-y-auto" style={{ maxHeight: "min(16rem, calc(100vh - 12rem))" }}>
+        <div className="absolute left-0 top-full z-30 mt-1 w-full rounded-xl border border-zinc-100 bg-white py-1 shadow-xl overflow-y-auto" style={{ maxHeight: "min(16rem, calc(100vh - 12rem))" }}>
           {suggestions.map((c, i) => (
             <button
               key={c.id}
@@ -1363,7 +1363,7 @@ function BlockCharacterSelector({
         </div>
       )}
       {suggestions.length === 0 && query && (
-        <div className="absolute left-0 top-full z-10 mt-1 w-full rounded-xl border border-zinc-100 bg-white px-4 py-2 shadow-xl">
+        <div className="absolute left-0 top-full z-30 mt-1 w-full rounded-xl border border-zinc-100 bg-white px-4 py-2 shadow-xl">
           <p className="text-xs text-zinc-400">无匹配角色</p>
         </div>
       )}
