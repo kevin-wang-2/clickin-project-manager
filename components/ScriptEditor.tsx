@@ -546,6 +546,7 @@ function ScenePanel({
   open,
   onOpenChange,
   canImport,
+  onNavigate,
 }: {
   scenes: Scene[];
   productionId: string;
@@ -555,6 +556,7 @@ function ScenePanel({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   canImport?: boolean;
+  onNavigate?: () => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -581,11 +583,11 @@ function ScenePanel({
             <span className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">章节管理</span>
             <div className="flex items-center gap-2">
               {canImport && productionId && (
-                <Link href={`/production/${productionId}/import-scenes`} className="text-[11px] text-blue-400 hover:text-blue-600 transition-colors">
+                <Link href={`/production/${productionId}/import-scenes`} onNavigate={onNavigate} className="text-[11px] text-blue-400 hover:text-blue-600 transition-colors">
                   导入
                 </Link>
               )}
-              <Link href={`/production/${productionId}/scenes`} className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors">
+              <Link href={`/production/${productionId}/scenes`} onNavigate={onNavigate} className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors">
                 管理页 →
               </Link>
             </div>
@@ -870,6 +872,7 @@ function CharacterPanel({
   onRename,
   open,
   onOpenChange,
+  onNavigate,
 }: {
   characters: Character[];
   productionId: string;
@@ -878,6 +881,7 @@ function CharacterPanel({
   onRename: (id: string, name: string) => void;
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  onNavigate?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -915,7 +919,7 @@ function CharacterPanel({
         <div className="absolute left-0 top-full z-30 mt-2 w-56 rounded-xl border border-zinc-100 bg-white shadow-xl flex flex-col" style={{ maxHeight: "min(28rem, calc(100vh - 8rem))" }}>
           <div className="shrink-0 flex items-center justify-between border-b border-zinc-100 px-4 py-2.5">
             <span className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">角色管理</span>
-            <Link href={`/production/${productionId}/characters`} className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors">
+            <Link href={`/production/${productionId}/characters`} onNavigate={onNavigate} className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors">
               管理页 →
             </Link>
           </div>
@@ -2445,12 +2449,13 @@ function relativeTime(iso: string): string {
 
 function CommentsPanel({
   blockId, productionId, versionId, comments, currentOpenId, isAdmin,
-  onAdd, onEdit, onDelete, onClose,
+  onAdd, onEdit, onDelete, onClose, onNavigate,
 }: {
   blockId: string; productionId: string; versionId?: string | null; comments: Comment[];
   currentOpenId: string; isAdmin: boolean;
   onAdd: (c: Comment) => void; onEdit: (c: Comment) => void;
   onDelete: (id: string) => void; onClose: () => void;
+  onNavigate?: () => void;
 }) {
   const [members, setMembers] = useState<Mention[]>([]);
   const [newText, setNewText] = useState("");
@@ -2617,6 +2622,7 @@ function CommentsPanel({
                 mountId={topC.id}
                 label="评论附件"
                 display="compact"
+                onNavigate={onNavigate}
               />
             </div>
 
@@ -2635,6 +2641,7 @@ function CommentsPanel({
                   mountId={r.id}
                   label="评论附件"
                   display="compact"
+                  onNavigate={onNavigate}
                 />
               </div>
             ))}
@@ -2787,6 +2794,33 @@ export default function ScriptEditor({
     });
   }, []);
 
+  const prepareForNavigation = useCallback(() => {
+    navigatingAwayRef.current = true;
+    if (windowRangeFrameRef.current !== null) {
+      cancelAnimationFrame(windowRangeFrameRef.current);
+      windowRangeFrameRef.current = null;
+    }
+    if (reorderUnlockFrame.current !== null) {
+      cancelAnimationFrame(reorderUnlockFrame.current);
+      reorderUnlockFrame.current = null;
+    }
+    if (reorderNoticeTimer.current !== null) {
+      clearTimeout(reorderNoticeTimer.current);
+      reorderNoticeTimer.current = null;
+    }
+    if (movedHighlightTimer.current !== null) {
+      clearTimeout(movedHighlightTimer.current);
+      movedHighlightTimer.current = null;
+    }
+    if (presenceTimerRef.current !== null) {
+      clearTimeout(presenceTimerRef.current);
+      presenceTimerRef.current = null;
+    }
+    pendingNavigateRef.current = null;
+    postNavCorrectionRef.current = null;
+    pendingMoveCenterRef.current = null;
+  }, []);
+
   const taRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingFocus = useRef<{ id: string; textOffset?: number; atEnd?: boolean } | null>(null);
   const pendingCharOpen = useRef<string | null>(null);
@@ -2804,6 +2838,7 @@ export default function ScriptEditor({
   const pendingMoveCenterRef = useRef<{ id: string; index: number } | null>(null);
   const reorderNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const movedHighlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigatingAwayRef = useRef(false);
   const blocksRef = useRef(blocks);
   const prevBlocksLengthRef = useRef(blocks.length);
   useLayoutEffect(() => { blocksRef.current = blocks; }, [blocks]);
@@ -3001,6 +3036,7 @@ export default function ScriptEditor({
   };
 
   const recomputeWindow = useCallback(() => {
+    if (navigatingAwayRef.current) return;
     if (draggingBlockId.current || isReorderLockedRef.current) return;
     const container = blocksContainerRef.current;
     const bl = blocksRef.current;
@@ -3065,6 +3101,7 @@ export default function ScriptEditor({
     let rafId = 0;
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     const onScroll = () => {
+      if (navigatingAwayRef.current) return;
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(recomputeWindow);
       if (!scrollLockedRef.current) {
@@ -3111,6 +3148,7 @@ export default function ScriptEditor({
 
   // Measure rendered block heights after each render pass
   useEffect(() => {
+    if (navigatingAwayRef.current) return;
     const container = blocksContainerRef.current;
     if (!container) return;
     let changed = false;
@@ -3133,6 +3171,7 @@ export default function ScriptEditor({
   });
 
   useLayoutEffect(() => {
+    if (navigatingAwayRef.current) return;
     const centerTarget = pendingMoveCenterRef.current;
     if (centerTarget === null) return;
     if (blocks.length === 0) {
@@ -3161,6 +3200,7 @@ export default function ScriptEditor({
 
   // Precise correction pass: fires after newly-rendered blocks are measured (before next paint)
   useLayoutEffect(() => {
+    if (navigatingAwayRef.current) return;
     if (correctionTick === 0) return;
     const nav = postNavCorrectionRef.current;
     if (!nav) return;
@@ -3187,6 +3227,7 @@ export default function ScriptEditor({
 
   // After each window-changing render, execute any pending navigation (fires before paint)
   useLayoutEffect(() => {
+    if (navigatingAwayRef.current) return;
     const nav = pendingNavigateRef.current;
     if (!nav) return;
     const el = nav.kind === 'block'
@@ -3215,6 +3256,7 @@ export default function ScriptEditor({
 
   // Update spacer heights from cumulative cache after each render (safe: layoutEffect, not render)
   useLayoutEffect(() => {
+    if (navigatingAwayRef.current) return;
     const cum = cumulativeHRef.current;
     const n = blocks.length;
     const top = cum[windowRange.start] ?? windowRange.start * DEFAULT_BLOCK_H;
@@ -3415,7 +3457,12 @@ export default function ScriptEditor({
   // ── Clear block highlight on scroll or click ─────────────────────────────────
   useEffect(() => {
     if (!highlightedBlockId) return;
-    const clear = () => setHighlightedBlockId(null);
+    const clear = (event?: Event) => {
+      if (navigatingAwayRef.current) return;
+      const target = event?.target as HTMLElement | null;
+      if (target?.closest("a[href]")) return;
+      setHighlightedBlockId(null);
+    };
     const timer = setTimeout(() => {
       document.addEventListener("scroll", clear, { passive: true, capture: true });
       document.addEventListener("click", clear);
@@ -4026,6 +4073,7 @@ export default function ScriptEditor({
       if (draggingBlockId.current || isReorderLockedRef.current) return;
       const target = e.target as HTMLElement | null;
       if (!target) return;
+      if (target.closest("a[href]")) return;
       const docEl = document.documentElement;
       const isViewportScrollbar = e.clientX >= docEl.clientWidth || e.clientY >= docEl.clientHeight;
       if (isViewportScrollbar) return;
@@ -4380,6 +4428,7 @@ export default function ScriptEditor({
         <div className="mx-auto flex h-14 max-w-3xl flex-wrap items-center gap-3 px-6">
           <Link
             href={productionId ? `/production/${productionId}` : "/"}
+            onNavigate={prepareForNavigation}
             className="shrink-0 text-xs text-zinc-400 hover:text-zinc-600 transition-colors"
           >
             ← 返回
@@ -4455,6 +4504,7 @@ export default function ScriptEditor({
                         <div className="my-1 border-t border-zinc-50" />
                         <Link
                           href={`/production/${productionId}/import-script`}
+                          onNavigate={prepareForNavigation}
                           className="block w-full px-3 py-1.5 text-left text-sm text-blue-600 hover:bg-zinc-50"
                         >
                           导入剧本内容…
@@ -4474,6 +4524,7 @@ export default function ScriptEditor({
                 versions={versions}
                 currentVersionId={activeVersionId}
                 canManage={canManageVersions}
+                onNavigate={prepareForNavigation}
                 onChange={(vid) => {
                   setActiveVersionId(vid);
                   const ver = versions.find(v => v.id === vid);
@@ -4497,6 +4548,7 @@ export default function ScriptEditor({
                 open={openMenu === "scene"}
                 onOpenChange={(v) => setOpenMenu(v ? "scene" : null)}
                 canImport={canImport}
+                onNavigate={prepareForNavigation}
               />
               <div className="h-4 w-px shrink-0 bg-zinc-100" />
               <CharacterPanel
@@ -4507,6 +4559,7 @@ export default function ScriptEditor({
                 onRename={renameChar}
                 open={openMenu === "char"}
                 onOpenChange={(v) => setOpenMenu(v ? "char" : null)}
+                onNavigate={prepareForNavigation}
               />
             </>
           )}
@@ -5279,6 +5332,7 @@ export default function ScriptEditor({
               label="Block 附件"
               canEdit={true}
               display="panel"
+              onNavigate={prepareForNavigation}
             />
           </div>
         </div>
@@ -5296,6 +5350,7 @@ export default function ScriptEditor({
           onEdit={c => setComments(prev => prev.map(x => x.id === c.id ? c : x))}
           onDelete={id => setComments(prev => prev.filter(x => x.id !== id))}
           onClose={() => setActiveCommentBlockId(null)}
+          onNavigate={prepareForNavigation}
         />
       )}
 
