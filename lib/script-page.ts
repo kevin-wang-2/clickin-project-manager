@@ -85,21 +85,19 @@ function sameCharacters(a: string[], b: string[]): boolean {
 }
 
 function charNameHidden(block: Block, prev: Block | null): boolean {
-  return !!(
-    prev &&
-    prev.type === "dialogue" &&
-    block.type === "dialogue" &&
-    block.characterIds.length > 0 &&
-    prev.lyric !== block.lyric &&
-    sameCharacters(prev.characterIds, block.characterIds)
-  );
+  if (block.forceShowCharacterName) return false;
+  if (!prev || prev.type !== "dialogue" || block.type !== "dialogue") return false;
+  if (block.sceneId !== prev.sceneId) return false;
+  if (block.rehearsalMark !== prev.rehearsalMark) return false;
+  if (block.characterIds.length === 0) return false;
+  return sameCharacters(prev.characterIds, block.characterIds);
 }
 
-function estimateBlockHeight(block: Block, prev: Block | null, upl: number): number {
+function estimateBlockHeight(block: Block, prev: Block | null, upl: number, forceCharName = false): number {
   const text = stripHtml(block.content);
   const lines = estimateLines(text, upl);
   const charNameH =
-    block.type === "dialogue" && block.characterIds.length > 0 && !charNameHidden(block, prev)
+    block.type === "dialogue" && block.characterIds.length > 0 && (forceCharName || !charNameHidden(block, prev))
       ? CHAR_NAME_HEIGHT : 0;
   return charNameH + lines * LINE_HEIGHT + 8; // 8px = py-1 wrapper
 }
@@ -116,20 +114,31 @@ export function computePageMap(blocks: Block[], layout: PageLayout = "a4"): Reco
   const pageMap: Record<string, number> = {};
   let page = 1;
   let used = 0;
+  let hasBlockOnPage = false;
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const prev = i > 0 ? blocks[i - 1] : null;
 
     if (block.sceneId && block.sceneId !== prev?.sceneId) {
-      if (used > 0 && used + SCENE_HEADER_HEIGHT > maxH) { page++; used = 0; }
+      if (used > 0 && used + SCENE_HEADER_HEIGHT > maxH) {
+        page++;
+        used = 0;
+        hasBlockOnPage = false;
+      }
       used += SCENE_HEADER_HEIGHT;
     }
 
-    const h = estimateBlockHeight(block, prev, upl);
-    if (used > 0 && used + h > maxH) { page++; used = 0; }
+    let h = estimateBlockHeight(block, prev, upl, !hasBlockOnPage);
+    if (used > 0 && used + h > maxH) {
+      page++;
+      used = 0;
+      hasBlockOnPage = false;
+      h = estimateBlockHeight(block, prev, upl, true);
+    }
     pageMap[block.id] = page;
     used += h;
+    hasBlockOnPage = true;
   }
 
   return pageMap;

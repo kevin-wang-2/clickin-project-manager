@@ -7,6 +7,7 @@ export type Block = {
   content: string;
   characterIds: string[];
   characterAnnotations: Record<string, string>;
+  forceShowCharacterName?: boolean;
   lyric: boolean;
   sceneId: string | null;
   rehearsalMark: string | null;

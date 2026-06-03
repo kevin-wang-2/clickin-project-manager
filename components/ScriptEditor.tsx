@@ -1379,6 +1379,8 @@ type PrintItem =
   | { kind: "sceneHeader"; scene: Scene }
   | { kind: "block"; block: Block; hideChar: boolean };
 
+const PRINT_CHAR_NAME_HEIGHT = 22;
+
 type PrintPageData = {
   items: PrintItem[];
   sceneLabel: string;
@@ -1397,6 +1399,7 @@ function computePrintPages(
   let curH = 0;
   let curLabel = "";
   let pageNum = 1;
+  let curHasBlock = false;
 
   const flush = () => {
     if (curItems.length === 0) return;
@@ -1404,25 +1407,30 @@ function computePrintPages(
     pageNum++;
     curItems = [];
     curH = 0;
+    curHasBlock = false;
   };
 
   const addItem = (item: PrintItem, h: number) => {
-    if (curH + h > contentH && curItems.length > 0) flush();
-    curItems.push(item);
-    curH += h;
+    const forcedCharHeight = item.kind === "block" && item.hideChar && item.block.characterIds.length > 0
+      ? PRINT_CHAR_NAME_HEIGHT
+      : 0;
+    let firstBlockOnPage = item.kind === "block" && !curHasBlock;
+    let nextH = h + (firstBlockOnPage ? forcedCharHeight : 0);
+    if (curH + nextH > contentH && curItems.length > 0) {
+      flush();
+      firstBlockOnPage = item.kind === "block";
+      nextH = h + (firstBlockOnPage ? forcedCharHeight : 0);
+    }
+    const nextItem = firstBlockOnPage ? { ...item, hideChar: false } : item;
+    curItems.push(nextItem);
+    curH += nextH;
+    if (item.kind === "block") curHasBlock = true;
   };
 
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
     const prev = i > 0 ? blocks[i - 1] : null;
-    const hideChar = !!(
-      prev &&
-      prev.type === "dialogue" &&
-      block.type === "dialogue" &&
-      block.characterIds.length > 0 &&
-      prev.lyric !== block.lyric &&
-      _sameCharacters(prev.characterIds, block.characterIds)
-    );
+    const hideChar = shouldHideCharacterLabel(prev, block);
 
     if (block.sceneId && block.sceneId !== prev?.sceneId) {
       const scene = scenes.find((s) => s.id === block.sceneId);
@@ -1619,14 +1627,7 @@ function PrintPreview({
           >
             {blocks.map((block, i) => {
               const prev = i > 0 ? blocks[i - 1] : null;
-              const hideChar = !!(
-                prev &&
-                prev.type === "dialogue" &&
-                block.type === "dialogue" &&
-                block.characterIds.length > 0 &&
-                prev.lyric !== block.lyric &&
-                _sameCharacters(prev.characterIds, block.characterIds)
-              );
+              const hideChar = shouldHideCharacterLabel(prev, block);
               const sceneStart = block.sceneId !== null && block.sceneId !== prev?.sceneId;
               return (
                 <div key={block.id}>
@@ -1813,6 +1814,15 @@ function _sameCharacters(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const s = new Set(a);
   return b.every((id) => s.has(id));
+}
+
+function shouldHideCharacterLabel(prev: Block | null, block: Block): boolean {
+  if (block.forceShowCharacterName) return false;
+  if (!prev || prev.type !== "dialogue" || block.type !== "dialogue") return false;
+  if (block.sceneId !== prev.sceneId) return false;
+  if (block.rehearsalMark !== prev.rehearsalMark) return false;
+  if (block.characterIds.length === 0) return false;
+  return _sameCharacters(prev.characterIds, block.characterIds);
 }
 
 type DragTarget =
@@ -5388,18 +5398,11 @@ export default function ScriptEditor({
             const nextRunOrd = runEnd + 1 < blocks.length ? ord(blocks[runEnd + 1].sceneId) : scenes.length;
             const availableScenes = scenes.filter((_, i) => i >= prevRunOrd && i <= nextRunOrd);
 
-            const hideCharSelector = !!(
-              prev &&
-              prev.type === "dialogue" &&
-              focusedId !== prev.id &&
-              block.type === "dialogue" &&
-              block.characterIds.length > 0 &&
-              prev.lyric !== block.lyric &&
-              _sameCharacters(prev.characterIds, block.characterIds)
-            );
             const sceneStart = block.sceneId !== null && block.sceneId !== prev?.sceneId;
             const isMarkStart = block.rehearsalMark !== (prev?.rehearsalMark ?? null);
             const pageBreak = bIdx > 0 && pageMap[block.id] !== pageMap[prev!.id];
+            const hideCharSelector =
+              focusedId === block.id || (pageBreak && display.pageBreaks) ? false : shouldHideCharacterLabel(prev, block);
             const matchOrder = searchMatches.indexOf(bIdx);
             const searchHighlight: "focused" | "match" | undefined =
               matchOrder === searchIdx ? "focused" : matchOrder >= 0 ? "match" : undefined;
