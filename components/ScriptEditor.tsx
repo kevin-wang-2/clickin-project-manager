@@ -4423,9 +4423,13 @@ export default function ScriptEditor({
     if (isLockedMode) return;
     saveSnapshot();
     setBlocks((prev) => {
-      if (prev.length <= 1) return prev;
       const idx = prev.findIndex((b) => b.id === id);
       if (idx === -1) return prev;
+      if (prev.length <= 1) {
+        const emptyBlock = makeBlock();
+        pendingFocus.current = { id: emptyBlock.id, atEnd: false };
+        return [emptyBlock];
+      }
       const nextFocus = prev[idx + 1] ?? prev[idx - 1];
       if (nextFocus) pendingFocus.current = { id: nextFocus.id, atEnd: false };
       return prev.filter((b) => b.id !== id);
@@ -4442,9 +4446,13 @@ export default function ScriptEditor({
     if (deleteIds.size === 0) return;
     saveSnapshot();
     setBlocks((prev) => {
-      if (prev.length <= 1) return prev;
       const remaining = prev.filter((b) => !deleteIds.has(b.id));
-      if (remaining.length === prev.length || remaining.length === 0) return prev;
+      if (remaining.length === prev.length) return prev;
+      if (remaining.length === 0) {
+        const emptyBlock = makeBlock();
+        pendingFocus.current = { id: emptyBlock.id, atEnd: false };
+        return [emptyBlock];
+      }
       const firstDeletedIdx = prev.findIndex((b) => deleteIds.has(b.id));
       const focusIdx = Math.min(firstDeletedIdx, remaining.length - 1);
       pendingFocus.current = { id: remaining[focusIdx].id, atEnd: false };
