@@ -524,6 +524,7 @@ function SceneRow({
   const [name, setName] = useState(scene.name);
   const [lastSeenNumber, setLastSeenNumber] = useState(scene.number);
   const [lastSeenName, setLastSeenName] = useState(scene.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   if (lastSeenNumber !== scene.number) { setLastSeenNumber(scene.number); setNumber(scene.number); }
   if (lastSeenName !== scene.name) { setLastSeenName(scene.name); setName(scene.name); }
@@ -535,7 +536,7 @@ function SceneRow({
   };
 
   return (
-    <tr className="border-b border-zinc-50 last:border-0">
+    <tr className="group border-b border-zinc-50 last:border-0">
       <td className={`py-1 pr-2 align-middle${indent ? " pl-4" : ""}`}>
         <input
           value={number}
@@ -557,12 +558,29 @@ function SceneRow({
         />
       </td>
       <td className="py-1 pl-2 align-middle">
-        <button
-          onClick={() => onRemove(scene.id)}
-          className="text-zinc-300 transition-colors hover:text-red-400"
-        >
-          ×
-        </button>
+        {confirmDelete ? (
+          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <button
+              onClick={() => onRemove(scene.id)}
+              className="text-xs text-red-500 hover:text-red-700"
+            >
+              确认
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-xs text-zinc-400 hover:text-zinc-600"
+            >
+              取消
+            </button>
+          </span>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-zinc-300 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+          >
+            ×
+          </button>
+        )}
       </td>
     </tr>
   );
@@ -877,6 +895,7 @@ function CharacterRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(char.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const commit = () => {
     const t = draft.trim();
@@ -911,12 +930,29 @@ function CharacterRow({
         )}
       </td>
       <td className="px-4 py-2 text-right">
-        <button
-          onClick={onRemove}
-          className="text-sm text-zinc-300 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-        >
-          删除
-        </button>
+        {confirmDelete ? (
+          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <button
+              onClick={onRemove}
+              className="text-xs text-red-500 hover:text-red-700"
+            >
+              确认
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-xs text-zinc-400 hover:text-zinc-600"
+            >
+              取消
+            </button>
+          </span>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-sm text-zinc-300 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+          >
+            ×
+          </button>
+        )}
       </td>
     </tr>
   );
