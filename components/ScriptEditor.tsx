@@ -2334,6 +2334,14 @@ function ScriptBlock({
     }
     const div = divRef.current!;
 
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "l" || e.key === "L")) {
+      e.preventDefault();
+      if (isStage || hasLyricConfig) return;
+      if (selectedCount > 1) setConfirmTypeAction("lyric");
+      else onToggleLyric();
+      return;
+    }
+
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey) {
       if (e.key === "i" || e.key === "I") {
         e.preventDefault();
@@ -6124,15 +6132,14 @@ export default function ScriptEditor({
                   ["⌘I", "切换舞台提示 / 段内括注"],
                   ["Enter", "新建块（行尾）"],
                   ["⇧Enter", "块内换行"],
-                  ["Backspace", "合并到上一块（行首）"],
-                  ["Tab", "切换台词 / 舞台提示"],
-                  ["⌘⌥L", "切换歌词模式"],
+                  ["Backspace", "对行首：合并至上一块（如类型、角色相同）\n对选中块：删除所选行"],
+                  ["⌘⇧L", "切换歌词模式"],
                   ["⌘⇧C", "复制当前块标签"],
                   ["⌘⇧V", "粘贴标签到当前块"],
                 ].map(([key, desc]) => (
                   <tr key={key}>
                     <td className="py-1.5 pr-4 font-mono text-[13px] text-zinc-400 whitespace-nowrap">{key}</td>
-                    <td className="py-1.5 text-zinc-600">{desc}</td>
+                    <td className="py-1.5 whitespace-pre-line text-zinc-600">{desc}</td>
                   </tr>
                 ))}
               </tbody>
