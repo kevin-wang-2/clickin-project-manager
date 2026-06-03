@@ -758,29 +758,38 @@ function ScenePicker({
   availableScenes,
   sceneId,
   onChange,
+  onOpenChange,
 }: {
   scenes: Scene[];
   availableScenes: Scene[];
   sceneId: string | null;
   onChange: (id: string | null) => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        onOpenChange?.(false);
+      }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  }, [onOpenChange]);
 
   const current = scenes.find((s) => s.id === sceneId);
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className={`relative ${open ? "z-40" : ""}`}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          onOpenChange?.(nextOpen);
+        }}
         title="设置章节起点"
         className={`rounded px-1.5 py-0.5 text-[11px] font-bold tracking-wide transition-colors ${
           current
@@ -791,9 +800,9 @@ function ScenePicker({
         {current ? current.number : "章"}
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 min-w-[9rem] rounded-xl border border-zinc-100 bg-white py-1 shadow-xl overflow-y-auto" style={{ maxHeight: "min(20rem, calc(100vh - 12rem))" }}>
+        <div className="absolute right-0 top-full z-50 mt-1 min-w-[9rem] rounded-xl border border-zinc-100 bg-white py-1 shadow-xl overflow-y-auto" style={{ maxHeight: "min(20rem, calc(100vh - 12rem))" }}>
           <button
-            onMouseDown={(e) => { e.preventDefault(); onChange(null); setOpen(false); }}
+            onMouseDown={(e) => { e.preventDefault(); onChange(null); setOpen(false); onOpenChange?.(false); }}
             className="w-full px-3 py-1.5 text-left text-xs text-zinc-400 hover:bg-zinc-50"
           >
             — 无
@@ -801,7 +810,7 @@ function ScenePicker({
           {availableScenes.map((s) => (
             <button
               key={s.id}
-              onMouseDown={(e) => { e.preventDefault(); onChange(s.id); setOpen(false); }}
+              onMouseDown={(e) => { e.preventDefault(); onChange(s.id); setOpen(false); onOpenChange?.(false); }}
               className={`w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-zinc-50 ${
                 s.id === sceneId ? "font-bold text-zinc-800" : "text-zinc-600"
               }`}
@@ -2076,12 +2085,18 @@ function ScriptBlock({
   const localContentRef = useRef<string | null>(null);
   const localTypeRef = useRef<BlockType | null>(null);
   const composingRef = useRef(false);
-  const compactStageLayoutActiveRef = useRef(false);
+  const compactControlLayoutActiveRef = useRef(false);
   const [charSelectorOpen, setCharSelectorOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [scenePickerOpen, setScenePickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmTypeAction, setConfirmTypeAction] = useState<"type" | "lyric" | null>(null);
-  const [compactStageLayout, setCompactStageLayout] = useState<{ deleteLeft: number | null; contentPaddingLeft: number } | null>(null);
+  const [compactControlLayout, setCompactControlLayout] = useState<{
+    deleteLeft: number | null;
+    contentPaddingLeft: number | null;
+    compact: boolean;
+    mode: "stage" | "hidden-character";
+  } | null>(null);
 
   useEffect(() => {
     setConfirmDelete(false);
@@ -2102,11 +2117,13 @@ function ScriptBlock({
   );
 
   const isStage = block.type === "stage";
+  const hiddenCharacterCompactCandidate = !isStage && hideCharSelector && !isFocused && !isSelected;
+  const shouldMeasureCompactControls = canEditText && (isStage || hiddenCharacterCompactCandidate);
 
   useLayoutEffect(() => {
-    if (!isStage) {
-      compactStageLayoutActiveRef.current = false;
-      setCompactStageLayout(null);
+    if (!shouldMeasureCompactControls) {
+      compactControlLayoutActiveRef.current = false;
+      setCompactControlLayout(null);
       return;
     }
 
@@ -2114,36 +2131,44 @@ function ScriptBlock({
     if (!blockEl) return;
 
     const updateCompactControls = () => {
-      const isCompactStage = blockEl.getBoundingClientRect().height < COMPACT_STAGE_CONTROL_THRESHOLD;
+      const isCompactBlock = blockEl.getBoundingClientRect().height < COMPACT_STAGE_CONTROL_THRESHOLD;
       const railEl = leftControlsRef.current;
       const triangleEl = blockEl.querySelector<HTMLElement>("[data-rehearsal-triangle='true']");
-      const contentEl = divRef.current;
+      const mode = isStage ? "stage" : "hidden-character";
+      const contentEl = mode === "stage" ? divRef.current : null;
 
-      if (isCompactStage) compactStageLayoutActiveRef.current = true;
+      if (isCompactBlock) compactControlLayoutActiveRef.current = true;
 
-      if (!compactStageLayoutActiveRef.current || !railEl || !triangleEl || !contentEl) {
-        setCompactStageLayout(null);
+      if (!compactControlLayoutActiveRef.current || !railEl || !triangleEl || (mode === "stage" && !contentEl)) {
+        setCompactControlLayout(null);
         return;
       }
 
       const railRect = railEl.getBoundingClientRect();
       const triangleRect = triangleEl.getBoundingClientRect();
-      const contentRect = contentEl.getBoundingClientRect();
       const measuredDeleteLeft = triangleRect.left - railRect.left + COMPACT_STAGE_DELETE_SHIFT_PX;
-      const deleteLeft = isCompactStage ? measuredDeleteLeft : null;
+      const deleteLeft = isCompactBlock ? measuredDeleteLeft : null;
       const controlRight = Math.max(triangleRect.right, railRect.left + measuredDeleteLeft + 16);
-      const contentPaddingLeft = Math.max(4, Math.ceil(controlRight - contentRect.left + COMPACT_STAGE_CONTENT_GAP_PX));
+      const contentPaddingLeft = (() => {
+        if (mode !== "stage" || !contentEl) return null;
+        const contentRect = contentEl.getBoundingClientRect();
+        return Math.max(4, Math.ceil(controlRight - contentRect.left + COMPACT_STAGE_CONTENT_GAP_PX));
+      })();
 
-      setCompactStageLayout((prev) => {
+      setCompactControlLayout((prev) => {
         if (
           prev &&
+          prev.compact === isCompactBlock &&
+          prev.mode === mode &&
           (prev.deleteLeft === null && deleteLeft === null ||
             prev.deleteLeft !== null && deleteLeft !== null && Math.abs(prev.deleteLeft - deleteLeft) < 0.5) &&
-          Math.abs(prev.contentPaddingLeft - contentPaddingLeft) < 0.5
+          (prev.contentPaddingLeft === null && contentPaddingLeft === null ||
+            prev.contentPaddingLeft !== null && contentPaddingLeft !== null &&
+              Math.abs(prev.contentPaddingLeft - contentPaddingLeft) < 0.5)
         ) {
           return prev;
         }
-        return { deleteLeft, contentPaddingLeft };
+        return { deleteLeft, contentPaddingLeft, compact: isCompactBlock, mode };
       });
     };
 
@@ -2151,7 +2176,7 @@ function ScriptBlock({
     const observer = new ResizeObserver(updateCompactControls);
     observer.observe(blockEl);
     return () => observer.disconnect();
-  }, [isStage, lineNum, canEditRehearsalMark]);
+  }, [shouldMeasureCompactControls, isStage, lineNum, canEditRehearsalMark]);
 
   // Sync state → DOM only for external changes (split, merge, type toggle, etc.)
   useLayoutEffect(() => {
@@ -2288,18 +2313,21 @@ function ScriptBlock({
         ? "script-block-updated-focus-glow"
         : "script-block-updated-glow"
     : "";
-  const compactStageDeleteStyle: React.CSSProperties | undefined = compactStageLayout?.deleteLeft !== null && compactStageLayout?.deleteLeft !== undefined
-    ? { left: compactStageLayout.deleteLeft }
+  const compactDeleteStyle: React.CSSProperties | undefined = compactControlLayout?.deleteLeft !== null && compactControlLayout?.deleteLeft !== undefined
+    ? { left: compactControlLayout.deleteLeft }
     : undefined;
-  const compactStageContentStyle: React.CSSProperties | undefined = compactStageLayout
-    ? { paddingLeft: compactStageLayout.contentPaddingLeft }
+  const compactContentStyle: React.CSSProperties | undefined = compactControlLayout?.contentPaddingLeft !== null && compactControlLayout?.contentPaddingLeft !== undefined
+    ? { paddingLeft: compactControlLayout.contentPaddingLeft }
     : undefined;
   const hasReadOnlySceneLabel = !canEditMetadata && !!readOnlyScene;
-  const rightActionRowClass = `absolute z-20 flex items-center transition-opacity ${
-    isStage ? "-top-5" : "top-1"
+  const useCompactHiddenCharacterButtons = !!(
+    compactControlLayout?.compact && compactControlLayout.mode === "hidden-character"
+  );
+  const rightActionRowClass = `absolute ${scenePickerOpen ? "z-40" : "z-20"} flex items-center transition-opacity ${
+    isStage || useCompactHiddenCharacterButtons ? "-top-5" : "top-1"
   } ${hasReadOnlySceneLabel ? "right-8" : "right-2"}`;
   const readOnlySceneLabelClass = `absolute right-1.5 z-10 leading-none ${
-    isStage ? "-top-5" : "top-1"
+    isStage || useCompactHiddenCharacterButtons ? "-top-5" : "top-1"
   }`;
   return (
     <div
@@ -2346,7 +2374,7 @@ function ScriptBlock({
 
           {( /* `91a8ca` is my signature color (lighter version). ^v^ -- QPT */
             confirmDelete ? (
-              <span className="absolute left-0 bottom-0 z-10 flex translate-x-5 items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm" style={compactStageDeleteStyle} data-script-confirmation="true">
+              <span className="absolute left-0 bottom-0 z-10 flex translate-x-5 items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm" style={compactDeleteStyle} data-script-confirmation="true">
                 <span className="whitespace-nowrap text-[10px] text-zinc-400">
                   {selectedCount > 1 ? `确认删除所选 ${selectedCount} 行？` : "确认删除此行？"}
                 </span>
@@ -2374,7 +2402,7 @@ function ScriptBlock({
                   if (canDeleteWithoutConfirmation) onDelete();
                   else { setConfirmDelete(true); onDeleteConfirmationChange(true); }
                 }}
-                style={compactStageDeleteStyle}
+                style={compactDeleteStyle}
                 className="relative flex h-4 w-4 items-center justify-center rounded text-[12px] leading-none text-zinc-300 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover:opacity-100"
                 title="删除此行"
                 aria-label="删除此行"
@@ -2481,6 +2509,7 @@ function ScriptBlock({
               availableScenes={availableScenes}
               sceneId={block.sceneId}
               onChange={onSceneChange}
+              onOpenChange={setScenePickerOpen}
             />
           </div>
         )}
@@ -2581,7 +2610,7 @@ function ScriptBlock({
           syncContent();
         }}
         data-placeholder={isStage ? "舞台提示…" : "在此输入台词…"}
-        style={compactStageContentStyle}
+        style={compactContentStyle}
         className={`w-full min-h-[1.75rem] pl-1 outline-none text-base leading-7 break-words ${isScriptDragging || isSelected ? "caret-transparent" : ""} ${
           isStage ? "font-stage italic text-zinc-400 text-center" :
           block.lyric ? "font-lyric font-bold text-zinc-700 text-center uppercase" :
