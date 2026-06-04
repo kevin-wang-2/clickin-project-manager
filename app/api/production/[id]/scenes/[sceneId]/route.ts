@@ -1,7 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, updateSceneMetadata, getActiveVersionId } from "@/lib/db";
+import {
+  getProductionMemberContext, updateSceneMetadata, getActiveVersionId,
+  loadProduction, applyPatchToDB,
+} from "@/lib/db";
+import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -24,19 +27,26 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
 
   const body = await req.json();
 
-  // Handle number/name through the cache system
+  // Handle number/name through the DB
   const hasStructural = "number" in body || "name" in body;
   if (hasStructural) {
     const versionId = await getActiveVersionId(id) ?? '';
-    const state = getState(id, versionId);
-    const scene = state.scenes.find((s) => s.id === sceneId);
+    if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+    const result = await loadProduction(id, versionId);
+    const scene = result?.state.scenes.find((s) => s.id === sceneId);
     if (!scene) return Response.json({ error: "未找到章节" }, { status: 404 });
+
     const updated = {
       ...scene,
       number: typeof body.number === "string" ? body.number.trim() : scene.number,
       name:   typeof body.name   === "string" ? body.name.trim()   : scene.name,
     };
-    await applyPatch(id, versionId, { clientSeq: 0, blockOps: [], charOps: [], sceneOps: [{ op: "upsert", scene: updated }] });
+    await applyPatchToDB(id, versionId, {
+      clientSeq: 0, blockOps: [], charOps: [],
+      sceneOps: [{ op: "upsert", scene: updated }],
+    });
+    tickAndBroadcastSeq(id, versionId);
   }
 
   // Handle metadata fields — write to scene_version (requires version context)
@@ -63,7 +73,13 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/producti
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
-  const delVersionId = await getActiveVersionId(id) ?? '';
-  await applyPatch(id, delVersionId, { clientSeq: 0, blockOps: [], charOps: [], sceneOps: [{ op: "delete", id: sceneId }] });
+  const versionId = await getActiveVersionId(id) ?? '';
+  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+  await applyPatchToDB(id, versionId, {
+    clientSeq: 0, blockOps: [], charOps: [],
+    sceneOps: [{ op: "delete", id: sceneId }],
+  });
+  tickAndBroadcastSeq(id, versionId);
   return Response.json({ ok: true });
 }

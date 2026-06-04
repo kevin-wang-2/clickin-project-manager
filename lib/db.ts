@@ -1,10 +1,13 @@
 import { getPool } from "./pg";
 import type { PoolClient } from "pg";
-import type { Block, Character, Scene, ScriptState, ScriptConfig } from "./script-types";
+import type { Block, Character, Scene, ScriptState, ScriptConfig, PageLayout } from "./script-types";
 import { DEFAULT_SCRIPT_CONFIG } from "./script-types";
 import type { Permission, PermissionOverrides } from "./roles";
 import type { Cue, CueAnchor } from "./cue-types";
 import { adjustBlockAnchor, lcsAdjust } from "./cue-types";
+import type { ScriptPatch } from "./script-ops";
+import { keyBetween, initialKeys } from "./lex-order";
+import { computePageMap } from "./script-page";
 
 // ─── Version types ────────────────────────────────────────────────────────────
 
@@ -2977,4 +2980,416 @@ export async function listMemberProductions(openId: string): Promise<{ id: strin
     name: r.name,
     archivedAt: r.archived_at?.toISOString() ?? null,
   }));
+}
+
+// ─── Atomic patch application ─────────────────────────────────────────────────
+
+const ALL_PATCH_LAYOUTS: PageLayout[] = ["a4", "letter", "a3-2col", "tablet-2col"];
+
+/**
+ * Applies a ScriptPatch atomically to PostgreSQL.
+ *
+ * Design:
+ *  • All ops in the patch are executed in a single transaction (all-or-nothing).
+ *  • pg_advisory_xact_lock(hashtext(versionId)) serialises concurrent patches for
+ *    the same version so lexKey computation and CoW never interleave.
+ *  • A minimal "working state" (txBlocks / txScenes / txChars) is loaded once
+ *    inside the lock; subsequent ops are applied against it sequentially.
+ *  • Post-commit: cue drift (best-effort) and page-map update (fire-and-forget).
+ */
+export async function applyPatchToDB(
+  productionId: string,
+  versionId: string,
+  patch: ScriptPatch,
+): Promise<void> {
+  if (!patch.blockOps.length && !patch.charOps.length && !patch.sceneOps.length) return;
+
+  // Local working-state types
+  type TxBlock = { blockId: string; snapshotId: string; lexKey: string };
+  type TxScene = Scene & { sortOrder: number };
+  type TxChar  = Character & { sortOrder: number };
+
+  // Collected inside the transaction; consumed post-commit for cue drift
+  const driftDeletes: Array<{ snapshotId: string; prevId: string | null; nextId: string | null }> = [];
+  const driftUpdates: Array<{ oldSnapshotId: string; newSnapshotId: string; oldContent: string; newContent: string }> = [];
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    // ── Serialise concurrent patches for the same version ────────────────────
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [versionId]);
+
+    // ── Load current version state (within the lock) ─────────────────────────
+    const blockRows = await client.query<{ block_id: string; snapshot_id: string; sort_key: string }>(
+      "SELECT block_id, snapshot_id, sort_key FROM script_version WHERE version_id = $1 ORDER BY sort_key",
+      [versionId]
+    );
+    const sceneRows = await client.query<{ scene_id: string; num: string; name: string; sort_order: number; parent_id: string | null }>(
+      "SELECT sv.scene_id, sv.num, sv.name, sv.sort_order, sv.parent_id FROM scene_version sv WHERE sv.version_id = $1 ORDER BY sv.sort_order",
+      [versionId]
+    );
+    const charRows = await client.query<{ character_id: string; name: string; sort_order: number; is_aggregate: boolean }>(
+      "SELECT cv.character_id, cv.name, cv.sort_order, cv.is_aggregate FROM character_version cv WHERE cv.version_id = $1 ORDER BY cv.sort_order",
+      [versionId]
+    );
+
+    // Working ordered block list (mutated as ops are applied)
+    const txBlocks: TxBlock[] = blockRows.rows.map(r => ({
+      blockId: r.block_id, snapshotId: r.snapshot_id, lexKey: r.sort_key,
+    }));
+    const txBlockMap = new Map<string, TxBlock>(txBlocks.map(b => [b.blockId, b]));
+
+    // Working scene / char lists
+    const txScenes: TxScene[] = sceneRows.rows.map(r => ({
+      id: r.scene_id, number: r.num, name: r.name, parentId: r.parent_id, sortOrder: r.sort_order,
+    }));
+    const txChars: TxChar[] = charRows.rows.map(r => ({
+      id: r.character_id, name: r.name, isAggregate: r.is_aggregate, sortOrder: r.sort_order,
+    }));
+
+    // ── Pre-flight: collect data needed for post-commit cue drift ─────────────
+    // Adjacency snapshot of blocks that will be deleted (before any ops run)
+    for (const op of patch.blockOps) {
+      if (op.op !== 'delete') continue;
+      const idx = txBlocks.findIndex(b => b.blockId === op.id);
+      if (idx < 0) continue;
+      driftDeletes.push({
+        snapshotId: txBlocks[idx].snapshotId,
+        prevId: idx > 0 ? txBlocks[idx - 1].snapshotId : null,
+        nextId: idx + 1 < txBlocks.length ? txBlocks[idx + 1].snapshotId : null,
+      });
+    }
+    // Old content for blocks that will be updated (for cue offset drift detection)
+    const updateSnapshotIds = patch.blockOps
+      .filter(op => op.op === 'update')
+      .map(op => txBlockMap.get(op.block.id)?.snapshotId)
+      .filter((s): s is string => !!s);
+    const oldContentMap = new Map<string, string>(); // snapshotId → old content
+    if (updateSnapshotIds.length > 0) {
+      const res = await client.query<{ id: string; content: string }>(
+        "SELECT id, content FROM script WHERE id = ANY($1::text[])", [updateSnapshotIds]
+      );
+      for (const r of res.rows) oldContentMap.set(r.id, r.content);
+    }
+
+    // ── Apply scene ops ───────────────────────────────────────────────────────
+    const dirtySceneIds  = new Set<string>();
+    const deletedSceneIds = new Set<string>();
+
+    for (const op of patch.sceneOps) {
+      if (op.op === 'upsert') {
+        const idx = txScenes.findIndex(s => s.id === op.scene.id);
+        const sortOrder = idx >= 0 ? txScenes[idx].sortOrder : txScenes.length;
+        const updated: TxScene = { ...op.scene, sortOrder };
+        if (idx >= 0) txScenes[idx] = updated; else txScenes.push(updated);
+        dirtySceneIds.add(op.scene.id);
+        deletedSceneIds.delete(op.scene.id);
+      } else if (op.op === 'delete') {
+        const idx = txScenes.findIndex(s => s.id === op.id);
+        if (idx >= 0) txScenes.splice(idx, 1);
+        deletedSceneIds.add(op.id);
+        dirtySceneIds.delete(op.id);
+      } else { // reorder
+        const sceneMap = new Map(txScenes.map(s => [s.id, s]));
+        const newOrder = op.ids.map(id => sceneMap.get(id)).filter((s): s is TxScene => !!s);
+        for (let i = 0; i < newOrder.length; i++) {
+          if (newOrder[i].sortOrder !== i) {
+            newOrder[i] = { ...newOrder[i], sortOrder: i };
+            dirtySceneIds.add(newOrder[i].id);
+          }
+        }
+        txScenes.length = 0;
+        txScenes.push(...newOrder);
+      }
+    }
+
+    if (deletedSceneIds.size > 0) {
+      await client.query(
+        "DELETE FROM scene_version WHERE scene_id = ANY($1::text[]) AND version_id = $2",
+        [[...deletedSceneIds], versionId]
+      );
+    }
+    if (dirtySceneIds.size > 0) {
+      const toWrite = txScenes.filter(s => dirtySceneIds.has(s.id));
+      await client.query(
+        `INSERT INTO scene (id, production_id) SELECT unnest($1::text[]), $2 ON CONFLICT (id) DO NOTHING`,
+        [toWrite.map(s => s.id), productionId]
+      );
+      await client.query(
+        `INSERT INTO scene_version (scene_id, version_id, num, name, sort_order, parent_id)
+         SELECT unnest($1::text[]), $2, unnest($3::text[]), unnest($4::text[]), unnest($5::int[]), unnest($6::text[])
+         ON CONFLICT (scene_id, version_id) DO UPDATE
+           SET num = EXCLUDED.num, name = EXCLUDED.name,
+               sort_order = EXCLUDED.sort_order, parent_id = EXCLUDED.parent_id`,
+        [toWrite.map(s => s.id), versionId,
+         toWrite.map(s => s.number), toWrite.map(s => s.name),
+         toWrite.map(s => s.sortOrder), toWrite.map(s => s.parentId ?? null)]
+      );
+    }
+
+    // ── Apply char ops ────────────────────────────────────────────────────────
+    const dirtyCharIds  = new Set<string>();
+    const deletedCharIds = new Set<string>();
+
+    for (const op of patch.charOps) {
+      if (op.op === 'upsert') {
+        const idx = txChars.findIndex(c => c.id === op.char.id);
+        const sortOrder = idx >= 0 ? txChars[idx].sortOrder : txChars.length;
+        const updated: TxChar = { ...op.char, sortOrder };
+        if (idx >= 0) txChars[idx] = updated; else txChars.push(updated);
+        dirtyCharIds.add(op.char.id);
+        deletedCharIds.delete(op.char.id);
+      } else { // delete
+        const idx = txChars.findIndex(c => c.id === op.id);
+        if (idx >= 0) txChars.splice(idx, 1);
+        deletedCharIds.add(op.id);
+        dirtyCharIds.delete(op.id);
+      }
+    }
+
+    if (deletedCharIds.size > 0) {
+      await client.query(
+        "DELETE FROM character_version WHERE character_id = ANY($1::text[]) AND version_id = $2",
+        [[...deletedCharIds], versionId]
+      );
+    }
+    if (dirtyCharIds.size > 0) {
+      const toWrite = txChars.filter(c => dirtyCharIds.has(c.id));
+      await client.query(
+        `INSERT INTO character (id, production_id) SELECT unnest($1::text[]), $2 ON CONFLICT (id) DO NOTHING`,
+        [toWrite.map(c => c.id), productionId]
+      );
+      await client.query(
+        `INSERT INTO character_version (character_id, version_id, name, sort_order, is_aggregate)
+         SELECT unnest($1::text[]), $2, unnest($3::text[]), unnest($4::int[]), unnest($5::bool[])
+         ON CONFLICT (character_id, version_id) DO UPDATE
+           SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, is_aggregate = EXCLUDED.is_aggregate`,
+        [toWrite.map(c => c.id), versionId,
+         toWrite.map(c => c.name), toWrite.map(c => c.sortOrder), toWrite.map(c => c.isAggregate)]
+      );
+    }
+
+    // ── Apply block ops ───────────────────────────────────────────────────────
+    for (const op of patch.blockOps) {
+      switch (op.op) {
+
+        case 'insert': {
+          // Determine insertion point.
+          // afterId=null → insert at position 0 (beginning).
+          // afterId provided but not found → insert at end (lenient fallback).
+          const afterIdx = op.afterId !== null
+            ? txBlocks.findIndex(b => b.blockId === op.afterId)
+            : -1;
+          const insertAt = op.afterId === null ? 0
+            : afterIdx >= 0 ? afterIdx + 1
+            : txBlocks.length;
+
+          const prevLexKey = insertAt > 0 ? txBlocks[insertAt - 1].lexKey : null;
+          const nextLexKey = insertAt < txBlocks.length ? txBlocks[insertAt].lexKey : null;
+          const lexKey = keyBetween(prevLexKey, nextLexKey);
+          const snapshotId = genSnapshotId();
+
+          await client.query(
+            `INSERT INTO script (id, block_id, production_id, sort_key, scene_id, rehearsal_mark, type, content, force_show_character_name)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::block_type, $8, $9)`,
+            [snapshotId, op.block.id, productionId, lexKey,
+             op.block.sceneId ?? null, op.block.rehearsalMark ?? null,
+             toDbType(op.block), op.block.content, op.block.forceShowCharacterName ?? false]
+          );
+          await client.query(
+            "INSERT INTO script_version (snapshot_id, version_id, block_id, sort_key) VALUES ($1, $2, $3, $4)",
+            [snapshotId, versionId, op.block.id, lexKey]
+          );
+          if (op.block.characterIds.length > 0) {
+            await client.query(
+              `INSERT INTO script_character (script_id, character_id, position, annotation)
+               SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[]), unnest($4::text[])`,
+              [op.block.characterIds.map(() => snapshotId),
+               op.block.characterIds,
+               op.block.characterIds.map((_, i) => i),
+               op.block.characterIds.map(cid => op.block.characterAnnotations[cid] ?? null)]
+            );
+          }
+
+          const newTxBlock: TxBlock = { blockId: op.block.id, snapshotId, lexKey };
+          txBlocks.splice(insertAt, 0, newTxBlock);
+          txBlockMap.set(op.block.id, newTxBlock);
+          break;
+        }
+
+        case 'update': {
+          const cur = txBlockMap.get(op.block.id);
+          if (!cur) break; // not in this version — skip silently
+
+          const refRes = await client.query<{ cnt: string }>(
+            "SELECT COUNT(*) AS cnt FROM script_version WHERE snapshot_id = $1",
+            [cur.snapshotId]
+          );
+          const refCount = parseInt(refRes.rows[0].cnt, 10);
+
+          if (refCount <= 1) {
+            // Sole reference — update in-place
+            await client.query(
+              `UPDATE script
+               SET scene_id = $1, rehearsal_mark = $2, type = $3::block_type,
+                   content = $4, force_show_character_name = $5
+               WHERE id = $6`,
+              [op.block.sceneId ?? null, op.block.rehearsalMark ?? null,
+               toDbType(op.block), op.block.content,
+               op.block.forceShowCharacterName ?? false, cur.snapshotId]
+            );
+            await client.query("DELETE FROM script_character WHERE script_id = $1", [cur.snapshotId]);
+            if (op.block.characterIds.length > 0) {
+              await client.query(
+                `INSERT INTO script_character (script_id, character_id, position, annotation)
+                 SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[]), unnest($4::text[])`,
+                [op.block.characterIds.map(() => cur.snapshotId),
+                 op.block.characterIds,
+                 op.block.characterIds.map((_, i) => i),
+                 op.block.characterIds.map(cid => op.block.characterAnnotations[cid] ?? null)]
+              );
+            }
+            const oldContent = oldContentMap.get(cur.snapshotId);
+            if (oldContent !== undefined && oldContent !== op.block.content) {
+              driftUpdates.push({
+                oldSnapshotId: cur.snapshotId, newSnapshotId: cur.snapshotId,
+                oldContent, newContent: op.block.content,
+              });
+            }
+          } else {
+            // Multi-referenced — copy-on-write
+            const oldSnapshotId = cur.snapshotId;
+            const newSnapshotId = genSnapshotId();
+
+            await client.query(
+              `INSERT INTO script (id, block_id, production_id, sort_key, scene_id, rehearsal_mark, type, content, force_show_character_name)
+               VALUES ($1, $2, $3, $4, $5, $6, $7::block_type, $8, $9)`,
+              [newSnapshotId, op.block.id, productionId, cur.lexKey,
+               op.block.sceneId ?? null, op.block.rehearsalMark ?? null,
+               toDbType(op.block), op.block.content, op.block.forceShowCharacterName ?? false]
+            );
+            await client.query(
+              "UPDATE script_version SET snapshot_id = $1 WHERE snapshot_id = $2 AND version_id = $3",
+              [newSnapshotId, oldSnapshotId, versionId]
+            );
+            if (op.block.characterIds.length > 0) {
+              await client.query(
+                `INSERT INTO script_character (script_id, character_id, position, annotation)
+                 SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[]), unnest($4::text[])`,
+                [op.block.characterIds.map(() => newSnapshotId),
+                 op.block.characterIds,
+                 op.block.characterIds.map((_, i) => i),
+                 op.block.characterIds.map(cid => op.block.characterAnnotations[cid] ?? null)]
+              );
+            }
+            // Copy associated data to new snapshot
+            await client.query(
+              `INSERT INTO block_tag (block_id, group_id, option_id, value, updated_at)
+               SELECT $1, group_id, option_id, value, updated_at FROM block_tag WHERE block_id = $2
+               ON CONFLICT (block_id, group_id) DO NOTHING`,
+              [newSnapshotId, oldSnapshotId]
+            );
+            await client.query(
+              `INSERT INTO asset_mount
+                 (id, asset_id, production_id, mount_type, mount_id, mount_aux_id,
+                  folder_path, mount_mode, version_resolved, created_by)
+               SELECT 'am_' || substr(md5(id || $1), 1, 16),
+                 asset_id, production_id, 'block_snapshot', $1, mount_aux_id,
+                 folder_path, mount_mode, version_resolved, created_by
+               FROM asset_mount WHERE mount_type = 'block_snapshot' AND mount_id = $2`,
+              [newSnapshotId, oldSnapshotId]
+            );
+            // Update working state so subsequent ops in this patch see the new snapshotId
+            cur.snapshotId = newSnapshotId;
+            const oldContent = oldContentMap.get(oldSnapshotId);
+            if (oldContent !== undefined && oldContent !== op.block.content) {
+              driftUpdates.push({
+                oldSnapshotId, newSnapshotId,
+                oldContent, newContent: op.block.content,
+              });
+            }
+          }
+          break;
+        }
+
+        case 'delete': {
+          const cur = txBlockMap.get(op.id);
+          if (!cur) break; // already gone — skip silently
+
+          // Remove from version; GC orphan snapshot if no other version references it
+          await client.query(
+            `WITH removed AS (
+               DELETE FROM script_version WHERE snapshot_id = $1 AND version_id = $2 RETURNING snapshot_id
+             )
+             DELETE FROM script s
+             WHERE s.id IN (SELECT snapshot_id FROM removed)
+               AND NOT EXISTS (SELECT 1 FROM script_version sv2 WHERE sv2.snapshot_id = s.id)`,
+            [cur.snapshotId, versionId]
+          );
+
+          const idx = txBlocks.findIndex(b => b.blockId === op.id);
+          if (idx >= 0) txBlocks.splice(idx, 1);
+          txBlockMap.delete(op.id);
+          break;
+        }
+
+        case 'reorder': {
+          // op.ids is the complete ordered list from the client.
+          // Filter to IDs that actually exist in this version.
+          const ordered = op.ids
+            .map(id => txBlockMap.get(id))
+            .filter((b): b is TxBlock => !!b);
+          if (!ordered.length) break;
+
+          // Assign fresh evenly-distributed keys; update only the rows that changed.
+          const newKeys = initialKeys(ordered.length);
+          for (let i = 0; i < ordered.length; i++) {
+            if (ordered[i].lexKey !== newKeys[i]) {
+              await client.query(
+                "UPDATE script_version SET sort_key = $1 WHERE snapshot_id = $2 AND version_id = $3",
+                [newKeys[i], ordered[i].snapshotId, versionId]
+              );
+              ordered[i].lexKey = newKeys[i];
+            }
+          }
+          // Rebuild the working block list to match the new order
+          txBlocks.length = 0;
+          txBlocks.push(...ordered);
+          break;
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // ── Post-commit: cue drift (best-effort, own transactions) ───────────────
+  const driftJobs: Promise<void>[] = [
+    ...driftDeletes.map(d =>
+      handleBlockDeleted(d.snapshotId, d.prevId, d.nextId, versionId)
+    ),
+    ...driftUpdates.map(u =>
+      handleBlockContentChanged(u.oldSnapshotId, u.newSnapshotId, u.oldContent, u.newContent, versionId)
+    ),
+  ];
+  if (driftJobs.length > 0) await Promise.allSettled(driftJobs);
+
+  // ── Post-commit: update page map (fire-and-forget) ────────────────────────
+  loadProduction(productionId, versionId)
+    .then(result => {
+      if (!result) return;
+      return savePageMap(
+        productionId,
+        Object.fromEntries(
+          ALL_PATCH_LAYOUTS.map(layout => [layout, computePageMap(result.state.blocks, layout)])
+        ),
+      );
+    })
+    .catch(err => console.error("[page-map] update error:", err));
 }

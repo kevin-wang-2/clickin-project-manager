@@ -1,6 +1,5 @@
 import { type NextRequest } from "next/server";
 import { loadProduction, canUserAccessProduction, getActiveVersionId, listVersions, updateProductionName, getProductionMemberContext } from "@/lib/db";
-import { loadFromDB } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
 import { hasPermission } from "@/lib/roles";
 
@@ -30,7 +29,6 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[
       return Response.json({ error: "剧本不存在" }, { status: 404 });
     }
 
-    loadFromDB(id, versionId, result.state, result.sortKeys, result.snapshotIds);
     return Response.json({ state: result.state, versionId, versions });
   } catch (err) {
     console.error("[production] load error:", err);

@@ -1,9 +1,12 @@
 import { type NextRequest } from "next/server";
-import { getState, applyPatch } from "@/lib/server-cache";
+import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { type ScriptPatch, requiredPermissions } from "@/lib/script-ops";
 import { TOKEN_COOKIE } from "@/lib/feishu-auth";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getActiveVersionId, getVersion } from "@/lib/db";
+import {
+  getProductionMemberContext, getActiveVersionId, getVersion,
+  loadProduction, applyPatchToDB,
+} from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -28,7 +31,10 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/script/[id]"
   }
   const versionId = await resolveVersion(req, id);
   if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
-  return Response.json(getState(id, versionId));
+
+  const result = await loadProduction(id, versionId);
+  if (!result) return Response.json({ error: "版本不存在" }, { status: 404 });
+  return Response.json(result.state);
 }
 
 export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/script/[id]">) {
@@ -43,21 +49,27 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/script/[id
   const versionId = await resolveVersion(req, id);
   if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
 
-  // Verify the version is editable
   const ver = await getVersion(versionId);
   if (!ver || ver.status !== 'editing') {
     return Response.json({ error: "该版本不可编辑" }, { status: 403 });
   }
 
+  // Load current state from DB for permission checking
+  const current = await loadProduction(id, versionId);
+  if (!current) return Response.json({ error: "版本不存在" }, { status: 404 });
+
   const patch = (await req.json()) as ScriptPatch;
-  const needed = requiredPermissions(patch, getState(id, versionId));
+  const needed = requiredPermissions(patch, current.state);
   for (const perm of needed) {
     if (!hasPermission(perm, session.isAdmin, memberRoles, overrides)) {
       return Response.json({ error: `权限不足：${perm}` }, { status: 403 });
     }
   }
 
-  const userToken = req.cookies.get(TOKEN_COOKIE)?.value;
-  const serverSeq = await applyPatch(id, versionId, patch, userToken);
+  // userToken unused in atomic path (Feishu sync removed); accepted but ignored
+  void req.cookies.get(TOKEN_COOKIE)?.value;
+
+  await applyPatchToDB(id, versionId, patch);
+  const serverSeq = tickAndBroadcastSeq(id, versionId);
   return Response.json({ ok: true, serverSeq });
 }

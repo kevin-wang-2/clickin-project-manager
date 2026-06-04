@@ -1,65 +1,17 @@
-import type { Block, Character, Scene, ScriptState, ScriptConfig } from "./script-types";
-import { DEFAULT_SCRIPT_CONFIG } from "./script-types";
-import type { BlockOp, CharOp, SceneOp, ScriptPatch } from "./script-ops";
-import { flushToDBVersioned, savePageMap } from "./db";
-import type { VersionedDbBlock } from "./db";
-import { computePageMap } from "./script-page";
-import type { PageLayout } from "./script-types";
-import {
-  blockToFields,
-  batchCreateRecords,
-  batchUpdateRecords,
-  batchDeleteRecords,
-} from "./feishu-bitable";
-import { initialKeys, keyBetween, isValidKey } from "./lex-order";
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const INITIAL_KEY_GAP = 65536;
-const RETRY_DELAY_MS = 5_000; // retry delay after a failed flush
-
-// ─── Internal types ───────────────────────────────────────────────────────────
-
-type ServerBlock = Block & {
-  snapshotId: string; // physical DB snapshot ID (may differ from block.id after CoW)
-  orderKey: number;   // internal sort (integer, used for fast reorder)
-  lexKey: string;     // Feishu-persisted sort key (base-36, 10 chars)
-};
-
-type Dirty = {
-  blocks: Map<string, ServerBlock>;
-  deletedSnapshotIds: Set<string>;  // snapshot_ids of deleted blocks (for versioned flush)
-  chars: Map<string, Character>;
-  deletedCharIds: Set<string>;
-  scenes: Map<string, Scene>;
-  deletedSceneIds: Set<string>;
-};
-
-type FeishuSync = {
-  appToken: string;
-  tableId: string;
-  userToken: string;
-  hasSortField: boolean;
-  // IDs whose block.id IS the Feishu record_id (loaded from Feishu)
-  feishuIds: Set<string>;
-  // client-generated block ID → Feishu record_id (after first create flush)
-  localToFeishu: Map<string, string>;
-  // Feishu record_id → last-flushed ServerBlock (for diffing)
-  lastSyncedBlocks: Map<string, ServerBlock>;
-};
-
-type CacheEntry = {
-  scriptId: string;   // productionId
-  versionId: string;
-  config: ScriptConfig;
-  blocks: ServerBlock[];       // sorted by orderKey
-  characters: Character[];
-  scenes: Scene[];
-  serverSeq: number;
-  dirty: Dirty;
-  flushTimer: ReturnType<typeof setTimeout> | null;
-  feishu: FeishuSync | null;
-};
+/**
+ * server-cache.ts — SSE, presence, and cue registry.
+ *
+ * The in-memory block/char/scene cache has been removed.
+ * All script state is read directly from PostgreSQL; writes use
+ * applyPatchToDB (lib/db.ts) with a pg_advisory_xact_lock for
+ * serialisation. This file only manages:
+ *
+ *  • SSE connections (script editor real-time seq broadcast)
+ *  • Script presence (who's editing which block)
+ *  • Cue SSE connections
+ *  • Cue presence
+ *  • A lightweight per-version seq counter (notification only)
+ */
 
 // ─── Presence types ───────────────────────────────────────────────────────────
 
@@ -70,6 +22,8 @@ export type PresenceClient = {
   blockId: string | null;
   updatedAt: number;
 };
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const PRESENCE_COLORS = [
   "#E53E3E", "#DD6B20", "#D69E2E", "#38A169",
@@ -82,43 +36,97 @@ function assignColor(clientId: string): string {
   return PRESENCE_COLORS[h % PRESENCE_COLORS.length];
 }
 
-// ─── HMR-safe global singleton ────────────────────────────────────────────────
+// ─── HMR-safe global singletons ───────────────────────────────────────────────
 
 type SSEPush = (frame: string) => void;
-type SSEClient = {
-  clientId: string;
-  push: SSEPush;
-};
+type SSEClient = { clientId: string; push: SSEPush };
 
 const g = global as typeof globalThis & {
-  __scriptCache?: Map<string, CacheEntry>;
-  __sseRegistry?: Map<string, Map<string, SSEClient>>;
+  __sseRegistry?:      Map<string, Map<string, SSEClient>>;
   __presenceRegistry?: Map<string, Map<string, PresenceClient>>;
+  __seqCounters?:      Map<string, number>;
+  __cueSSERegistry?:   Map<string, Map<string, SSEPush>>;
+  __cuePresenceRegistry?: Map<string, Map<string, CuePresenceClient>>;
 };
-
-function cache(): Map<string, CacheEntry> {
-  if (!g.__scriptCache) g.__scriptCache = new Map();
-  return g.__scriptCache;
-}
 
 function sseRegistry(): Map<string, Map<string, SSEClient>> {
   if (!g.__sseRegistry) g.__sseRegistry = new Map();
   return g.__sseRegistry;
 }
-
 function presenceRegistry(): Map<string, Map<string, PresenceClient>> {
   if (!g.__presenceRegistry) g.__presenceRegistry = new Map();
   return g.__presenceRegistry;
 }
+function seqCounters(): Map<string, number> {
+  if (!g.__seqCounters) g.__seqCounters = new Map();
+  return g.__seqCounters;
+}
+function cueSSEReg(): Map<string, Map<string, SSEPush>> {
+  if (!g.__cueSSERegistry) g.__cueSSERegistry = new Map();
+  return g.__cueSSERegistry;
+}
+function cuePresReg(): Map<string, Map<string, CuePresenceClient>> {
+  if (!g.__cuePresenceRegistry) g.__cuePresenceRegistry = new Map();
+  return g.__cuePresenceRegistry;
+}
 
-// ─── SSE helpers ──────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
+function cacheKey(productionId: string, versionId: string): string {
+  return `${productionId}:${versionId}`;
+}
+
+function broadcast(key: string, frame: string): void {
+  const clients = sseRegistry().get(key);
+  if (!clients) return;
+  for (const client of clients.values()) {
+    try { client.push(frame); } catch { /* ignore broken pipe */ }
+  }
+}
+
+// ─── Seq counter ──────────────────────────────────────────────────────────────
+
+/** Increments the per-version seq counter and returns the new value. */
+export function tickSeq(productionId: string, versionId: string): number {
+  const key = cacheKey(productionId, versionId);
+  const counters = seqCounters();
+  const seq = (counters.get(key) ?? 0) + 1;
+  counters.set(key, seq);
+  return seq;
+}
+
+/** Increments seq and immediately broadcasts it to all connected SSE clients. */
+export function tickAndBroadcastSeq(productionId: string, versionId: string): number {
+  const seq = tickSeq(productionId, versionId);
+  const key = cacheKey(productionId, versionId);
+  broadcast(key, `data: ${JSON.stringify({ seq })}\n\n`);
+  return seq;
+}
+
+/** Broadcast a named SSE event (e.g. "config") without incrementing seq. */
+export function broadcastEvent(
+  productionId: string,
+  versionId: string,
+  event: string,
+  data: unknown,
+): void {
+  const key = cacheKey(productionId, versionId);
+  broadcast(key, `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+// ─── SSE registration ─────────────────────────────────────────────────────────
+
+/**
+ * Register an SSE connection for a production version.
+ * Returns a cleanup function that removes the connection and returns whether
+ * the client still has any other active connections.
+ */
 export function registerSSE(
   productionId: string,
   versionId: string,
   connectionId: string,
   clientId: string,
-  push: SSEPush
+  push: SSEPush,
 ): () => boolean {
   const key = cacheKey(productionId, versionId);
   const reg = sseRegistry();
@@ -135,35 +143,11 @@ export function registerSSE(
   };
 }
 
-function broadcast(scriptId: string, frame: string): void {
-  const clients = sseRegistry().get(scriptId);
-  if (!clients) return;
-  for (const client of clients.values()) {
-    try { client.push(frame); } catch { /* ignore broken pipe */ }
-  }
-}
-
-function broadcastSeq(scriptId: string, seq: number): void {
-  broadcast(scriptId, `data: ${JSON.stringify({ seq })}\n\n`);
-}
-
-// key is productionId:versionId
-function presenceFrame(key: string): string {
-  const [productionId, versionId] = key.split(':');
-  const list = getPresence(productionId, versionId);
-  return `event: presence\ndata: ${JSON.stringify(list)}\n\n`;
-}
-
-function broadcastPresence(key: string): void {
-  broadcast(key, presenceFrame(key));
-}
-
-// ─── Presence helpers ─────────────────────────────────────────────────────────
+// ─── Presence ─────────────────────────────────────────────────────────────────
 
 export function getPresence(productionId: string, versionId: string): PresenceClient[] {
   const key = cacheKey(productionId, versionId);
-  const reg = presenceRegistry();
-  const clients = reg.get(key);
+  const clients = presenceRegistry().get(key);
   if (!clients) return [];
   const cutoff = Date.now() - 90_000;
   return Array.from(clients.values()).filter(p => p.updatedAt >= cutoff);
@@ -174,17 +158,13 @@ export function updatePresence(
   versionId: string,
   clientId: string,
   userName: string,
-  blockId: string | null
+  blockId: string | null,
 ): void {
   const key = cacheKey(productionId, versionId);
   const reg = presenceRegistry();
   if (!reg.has(key)) reg.set(key, new Map());
   reg.get(key)!.set(clientId, {
-    clientId,
-    userName,
-    color: assignColor(clientId),
-    blockId,
-    updatedAt: Date.now(),
+    clientId, userName, color: assignColor(clientId), blockId, updatedAt: Date.now(),
   });
   broadcastPresence(key);
 }
@@ -199,558 +179,17 @@ export function presenceFrameFor(productionId: string, versionId: string): strin
   return presenceFrame(cacheKey(productionId, versionId));
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function makeDirty(): Dirty {
-  return {
-    blocks: new Map(),
-    deletedSnapshotIds: new Set(),
-    chars: new Map(),
-    deletedCharIds: new Set(),
-    scenes: new Map(),
-    deletedSceneIds: new Set(),
-  };
+function presenceFrame(key: string): string {
+  const [productionId, versionId] = key.split(':');
+  const list = getPresence(productionId, versionId);
+  return `event: presence\ndata: ${JSON.stringify(list)}\n\n`;
 }
 
-function midOrderKey(lo: number, hi: number): number {
-  return Math.floor((lo + hi) / 2);
-}
-
-function blockChanged(a: ServerBlock, b: ServerBlock): boolean {
-  return (
-    a.content !== b.content ||
-    a.type !== b.type ||
-    a.lyric !== b.lyric ||
-    (a.forceShowCharacterName ?? false) !== (b.forceShowCharacterName ?? false) ||
-    a.sceneId !== b.sceneId ||
-    a.rehearsalMark !== b.rehearsalMark ||
-    a.lexKey !== b.lexKey ||
-    a.characterIds.length !== b.characterIds.length ||
-    a.characterIds.some((id, i) => id !== b.characterIds[i])
-  );
-}
-
-/**
- * Given blocks (in their intended display order) and a map of record_id → lex key
- * from Feishu, return a lex key string for each block in order.
- * Blocks missing a valid key get one interpolated from their neighbors.
- */
-function assignLexKeys(blocks: Block[], sortKeys: Map<string, string>): string[] {
-  if (!blocks.length) return [];
-
-  const raw: (string | null)[] = blocks.map(b => {
-    const k = sortKeys.get(b.id);
-    return k && isValidKey(k) ? k : null;
-  });
-
-  if (raw.every(k => k === null)) return initialKeys(blocks.length);
-
-  const result = [...raw];
-  for (let i = 0; i < result.length; i++) {
-    if (result[i] !== null) continue;
-    let lo: string | null = null;
-    for (let j = i - 1; j >= 0; j--) { if (result[j] !== null) { lo = result[j]; break; } }
-    let hi: string | null = null;
-    for (let j = i + 1; j < result.length; j++) { if (result[j] !== null) { hi = result[j]; break; } }
-    result[i] = keyBetween(lo, hi);
-  }
-
-  return result as string[];
-}
-
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-function cacheKey(productionId: string, versionId: string): string {
-  return `${productionId}:${versionId}`;
-}
-
-export function getOrCreate(productionId: string, versionId: string): CacheEntry {
-  const key = cacheKey(productionId, versionId);
-  const c = cache();
-  if (!c.has(key)) {
-    c.set(key, {
-      scriptId: productionId,
-      versionId,
-      config: { ...DEFAULT_SCRIPT_CONFIG },
-      blocks: [],
-      characters: [],
-      scenes: [],
-      serverSeq: 0,
-      dirty: makeDirty(),
-      flushTimer: null,
-      feishu: null,
-    });
-  }
-  return c.get(key)!;
-}
-
-/**
- * Populate the cache from a freshly loaded Feishu state.
- * Cancels any pending flush and resets dirty tracking.
- * Blocks in `state` must already be in the correct display order
- * (i.e. toScriptState was called with the sort field name).
- */
-export function loadFromFeishu(
-  scriptId: string,
-  state: ScriptState,
-  opts: {
-    appToken: string;
-    tableId: string;
-    userToken: string;
-    hasSortField: boolean;
-    sortKeys: Map<string, string>; // record_id → lex key from Feishu
-  }
-): void {
-  const c = cache();
-  const existing = c.get(scriptId);
-  if (existing?.flushTimer) clearTimeout(existing.flushTimer);
-
-  const lexKeyArr = assignLexKeys(state.blocks, opts.sortKeys);
-  const blocks: ServerBlock[] = state.blocks.map((b, i) => ({
-    ...b,
-    snapshotId: b.id, // Feishu blocks use block.id as snapshot_id (legacy)
-    orderKey: (i + 1) * INITIAL_KEY_GAP,
-    lexKey: lexKeyArr[i],
-  }));
-
-  const feishuIds = new Set(state.blocks.map(b => b.id));
-
-  // For lastSyncedBlocks, record what Feishu actually has for the sort key
-  // (not the generated value). Blocks with a missing/invalid sort key get
-  // lexKey "" so the diff sees them as dirty and writes the key back immediately.
-  const lastSyncedBlocks = new Map(blocks.map(b => {
-    const existing = opts.sortKeys.get(b.id);
-    return [b.id, { ...b, lexKey: isValidKey(existing) ? existing : "" }];
-  }));
-
-  const entry: CacheEntry = {
-    scriptId,
-    versionId: '', // Feishu-synced scripts don't use the versioned DB path
-    config: { ...(state.config ?? DEFAULT_SCRIPT_CONFIG) },
-    blocks,
-    characters: [...state.characters],
-    scenes: [...state.scenes],
-    serverSeq: 0,
-    dirty: makeDirty(),
-    flushTimer: null,
-    feishu: {
-      appToken: opts.appToken,
-      tableId: opts.tableId,
-      userToken: opts.userToken,
-      hasSortField: opts.hasSortField,
-      feishuIds,
-      localToFeishu: new Map(),
-      lastSyncedBlocks,
-    },
-  };
-  c.set(scriptId, entry);
-
-  // If any sort keys were generated (blocks had no valid key in Feishu),
-  // write them back immediately rather than waiting for the next edit flush.
-  const hasMissingKeys =
-    opts.hasSortField && state.blocks.some(b => !isValidKey(opts.sortKeys.get(b.id)));
-  if (hasMissingKeys) {
-    flushToFeishu(entry).catch(err =>
-      console.error("[feishu] initial sort key write-back error:", err)
-    );
-  }
-}
-
-/**
- * Populate the cache from data loaded out of PostgreSQL.
- * sortKeys maps block_id → sort_key.
- * snapshotIds maps block_id → snapshot_id (physical DB row).
- */
-export function loadFromDB(
-  productionId: string,
-  versionId: string,
-  state: ScriptState,
-  sortKeys: Map<string, string>,
-  snapshotIds: Map<string, string>,
-): void {
-  const key = cacheKey(productionId, versionId);
-  const c = cache();
-  const existing = c.get(key);
-  if (existing?.flushTimer) clearTimeout(existing.flushTimer);
-
-  const lexKeyArr = assignLexKeys(state.blocks, sortKeys);
-  const blocks: ServerBlock[] = state.blocks.map((b, i) => ({
-    ...b,
-    snapshotId: snapshotIds.get(b.id) ?? b.id,
-    orderKey: (i + 1) * INITIAL_KEY_GAP,
-    lexKey: lexKeyArr[i],
-  }));
-
-  c.set(key, {
-    scriptId: productionId,
-    versionId,
-    config: { ...state.config },
-    blocks,
-    characters: [...state.characters],
-    scenes: [...state.scenes],
-    serverSeq: 0,
-    dirty: makeDirty(),
-    flushTimer: null,
-    feishu: null,
-  });
-}
-
-/** Returns the current state as seen by the client (strips internal fields). */
-export function getState(productionId: string, versionId: string): ScriptState {
-  const entry = getOrCreate(productionId, versionId);
-  return {
-    config: { ...entry.config },
-    blocks: entry.blocks.map(({ snapshotId: _sn, orderKey: _ok, lexKey: _lk, ...b }) => b),
-    characters: [...entry.characters],
-    scenes: [...entry.scenes],
-  };
-}
-
-/** Update config in cache and broadcast to all connected clients. */
-export function applyConfig(productionId: string, versionId: string, config: ScriptConfig): void {
-  const entry = getOrCreate(productionId, versionId);
-  entry.config = { ...config };
-  const key = cacheKey(productionId, versionId);
-  broadcast(key, `event: config\ndata: ${JSON.stringify(config)}\n\n`);
-}
-
-/**
- * Applies a client patch, flushes to DB, and returns the new serverSeq.
- * If the flush fails it is retried after RETRY_DELAY_MS.
- */
-export async function applyPatch(
-  productionId: string,
-  versionId: string,
-  patch: ScriptPatch,
-  userToken?: string,
-): Promise<number> {
-  const entry = getOrCreate(productionId, versionId);
-
-  if (userToken && entry.feishu) {
-    entry.feishu.userToken = userToken;
-  }
-
-  applyCharOps(entry, patch.charOps);
-  applySceneOps(entry, patch.sceneOps);
-  applyBlockOps(entry, patch.blockOps);
-  sanitizeBlockRefs(entry);
-
-  entry.serverSeq += 1;
-  const seq = entry.serverSeq;
-  const key = cacheKey(productionId, versionId);
-
-  // 等待 flush 完成，确保数据已经写入数据库
-  await flush(entry)
-    .then(() => broadcastSeq(key, seq))
-    .catch(err => {
-      console.error("[db] flush error, scheduling retry:", err);
-      scheduleRetry(entry);
-    });
-
-  return seq;
-}
-
-// ─── Op application ───────────────────────────────────────────────────────────
-
-/**
- * After metadata ops are applied, walk all blocks and null-out any sceneId or
- * characterIds that reference entities no longer present in this production.
- * This resolves cross-client conflicts where one client deletes a scene/character
- * while another is editing blocks that reference it — metadata always wins.
- */
-function sanitizeBlockRefs(entry: CacheEntry): void {
-  const validScenes = new Set(entry.scenes.map(s => s.id));
-  const validChars  = new Set(entry.characters.map(c => c.id));
-
-  for (let i = 0; i < entry.blocks.length; i++) {
-    const b = entry.blocks[i];
-    const sceneId = b.sceneId != null && validScenes.has(b.sceneId) ? b.sceneId : null;
-    const characterIds = b.characterIds.filter(id => validChars.has(id));
-
-    if (sceneId === b.sceneId && characterIds.length === b.characterIds.length) continue;
-
-    const updated: ServerBlock = { ...b, sceneId, characterIds };
-    entry.blocks[i] = updated;
-    entry.dirty.blocks.set(updated.id, updated);
-  }
-}
-
-function applyCharOps(entry: CacheEntry, ops: CharOp[]) {
-  for (const op of ops) {
-    if (op.op === "upsert") {
-      const idx = entry.characters.findIndex((c) => c.id === op.char.id);
-      if (idx >= 0) entry.characters[idx] = op.char;
-      else entry.characters.push(op.char);
-      entry.dirty.chars.set(op.char.id, op.char);
-      entry.dirty.deletedCharIds.delete(op.char.id);
-    } else {
-      entry.characters = entry.characters.filter((c) => c.id !== op.id);
-      entry.dirty.deletedCharIds.add(op.id);
-      entry.dirty.chars.delete(op.id);
-    }
-  }
-}
-
-function applySceneOps(entry: CacheEntry, ops: SceneOp[]) {
-  for (const op of ops) {
-    if (op.op === "upsert") {
-      const idx = entry.scenes.findIndex((s) => s.id === op.scene.id);
-      if (idx >= 0) entry.scenes[idx] = op.scene;
-      else entry.scenes.push(op.scene);
-      entry.dirty.scenes.set(op.scene.id, op.scene);
-      entry.dirty.deletedSceneIds.delete(op.scene.id);
-    } else if (op.op === "delete") {
-      entry.scenes = entry.scenes.filter((s) => s.id !== op.id);
-      entry.dirty.deletedSceneIds.add(op.id);
-      entry.dirty.scenes.delete(op.id);
-    } else {
-      // reorder
-      const map = new Map(entry.scenes.map((s) => [s.id, s]));
-      entry.scenes = op.ids.map((id) => map.get(id)).filter(Boolean) as typeof entry.scenes;
-      // mark all retained scenes dirty so sort_order is re-persisted
-      for (const s of entry.scenes) entry.dirty.scenes.set(s.id, s);
-    }
-  }
-}
-
-function applyBlockOps(entry: CacheEntry, ops: BlockOp[]) {
-  for (const op of ops) {
-    switch (op.op) {
-      case "insert": {
-        const afterIdx = op.afterId
-          ? entry.blocks.findIndex((b) => b.id === op.afterId)
-          : -1;
-
-        const prevBlock = afterIdx >= 0 ? entry.blocks[afterIdx] : null;
-        const nextBlock =
-          afterIdx + 1 < entry.blocks.length ? entry.blocks[afterIdx + 1] : null;
-
-        const prevOrderKey = prevBlock?.orderKey ?? 0;
-        const nextOrderKey = nextBlock?.orderKey ?? prevOrderKey + INITIAL_KEY_GAP * 2;
-        const orderKey =
-          nextOrderKey - prevOrderKey > 1
-            ? midOrderKey(prevOrderKey, nextOrderKey)
-            : prevOrderKey + INITIAL_KEY_GAP;
-
-        const lexKey = keyBetween(prevBlock?.lexKey ?? null, nextBlock?.lexKey ?? null);
-
-        // Sentinel prefix tells flushToDBVersioned this is a new block needing a fresh snapshot
-        const snapshotId = `sn_new_${op.block.id}`;
-        const sb: ServerBlock = { ...op.block, snapshotId, orderKey, lexKey };
-        entry.blocks.splice(afterIdx + 1, 0, sb);
-        entry.dirty.blocks.set(sb.id, sb);
-        break;
-      }
-
-      case "update": {
-        const idx = entry.blocks.findIndex((b) => b.id === op.block.id);
-        if (idx >= 0) {
-          const sb: ServerBlock = {
-            ...op.block,
-            snapshotId: entry.blocks[idx].snapshotId, // preserve existing snapshot (CoW happens in flush)
-            orderKey: entry.blocks[idx].orderKey,
-            lexKey: entry.blocks[idx].lexKey,
-          };
-          entry.blocks[idx] = sb;
-          entry.dirty.blocks.set(sb.id, sb);
-        }
-        break;
-      }
-
-      case "delete": {
-        const delBlock = entry.blocks.find((b) => b.id === op.id);
-        entry.blocks = entry.blocks.filter((b) => b.id !== op.id);
-        // Track the snapshot_id so versioned flush can remove it from script_version
-        if (delBlock) entry.dirty.deletedSnapshotIds.add(delBlock.snapshotId);
-        entry.dirty.blocks.delete(op.id);
-        break;
-      }
-
-      case "reorder": {
-        const reordered: ServerBlock[] = op.ids
-          .map((id) => entry.blocks.find((b) => b.id === id))
-          .filter((b): b is ServerBlock => !!b);
-
-        for (let i = 0; i < reordered.length; i++) {
-          const prevOrderKey = i > 0 ? reordered[i - 1].orderKey : 0;
-          const prevLexKey = i > 0 ? reordered[i - 1].lexKey : null;
-          const nextLexKey =
-            i + 1 < reordered.length ? reordered[i + 1].lexKey : null;
-
-          let needsUpdate = false;
-
-          // Check if orderKey is still valid
-          let newOrderKey = reordered[i].orderKey;
-          if (newOrderKey <= prevOrderKey) {
-            const nextStable =
-              i + 1 < reordered.length
-                ? reordered[i + 1].orderKey
-                : prevOrderKey + INITIAL_KEY_GAP * 2;
-            newOrderKey =
-              nextStable > prevOrderKey + 1
-                ? midOrderKey(prevOrderKey, nextStable)
-                : prevOrderKey + INITIAL_KEY_GAP;
-            needsUpdate = true;
-          }
-
-          // Check if lexKey is still valid (strictly between neighbors)
-          let newLexKey = reordered[i].lexKey;
-          const lexOk =
-            (!prevLexKey || newLexKey > prevLexKey) &&
-            (!nextLexKey || newLexKey < nextLexKey);
-          if (!lexOk) {
-            newLexKey = keyBetween(prevLexKey, nextLexKey);
-            needsUpdate = true;
-          }
-
-          if (needsUpdate) {
-            reordered[i] = { ...reordered[i], orderKey: newOrderKey, lexKey: newLexKey };
-            entry.dirty.blocks.set(reordered[i].id, reordered[i]);
-          }
-        }
-
-        entry.blocks = reordered;
-        break;
-      }
-    }
-  }
-}
-
-// ─── Flush ────────────────────────────────────────────────────────────────────
-
-async function flushToFeishu(entry: CacheEntry): Promise<void> {
-  const sync = entry.feishu;
-  if (!sync) return;
-
-  const { appToken, tableId, userToken, hasSortField, feishuIds, localToFeishu, lastSyncedBlocks } = sync;
-  const { scenes, characters } = entry;
-
-  const getFeishuId = (blockId: string): string | null => {
-    if (localToFeishu.has(blockId)) return localToFeishu.get(blockId)!;
-    if (feishuIds.has(blockId)) return blockId;
-    return null;
-  };
-
-  const toCreate: { localId: string; fields: Record<string, unknown> }[] = [];
-  const toUpdate: { record_id: string; fields: Record<string, unknown> }[] = [];
-  const currentFeishuIds = new Set<string>();
-
-  for (const block of entry.blocks) {
-    const fid = getFeishuId(block.id);
-    const baseFields = blockToFields(block, scenes, characters);
-    const fields = hasSortField ? { ...baseFields, 排序: block.lexKey } : baseFields;
-
-    if (fid === null) {
-      toCreate.push({ localId: block.id, fields });
-    } else {
-      currentFeishuIds.add(fid);
-      const last = lastSyncedBlocks.get(fid);
-      if (!last || blockChanged(block, last)) {
-        toUpdate.push({ record_id: fid, fields });
-      }
-    }
-  }
-
-  const toDelete: string[] = [];
-  for (const fid of lastSyncedBlocks.keys()) {
-    if (!currentFeishuIds.has(fid)) toDelete.push(fid);
-  }
-
-  if (!toCreate.length && !toUpdate.length && !toDelete.length) return;
-
-  const [newIds] = await Promise.all([
-    toCreate.length > 0
-      ? batchCreateRecords(appToken, tableId, userToken, toCreate.map(c => c.fields))
-      : Promise.resolve([] as string[]),
-    toUpdate.length > 0
-      ? batchUpdateRecords(appToken, tableId, userToken, toUpdate)
-      : Promise.resolve(),
-    toDelete.length > 0
-      ? batchDeleteRecords(appToken, tableId, userToken, toDelete)
-      : Promise.resolve(),
-  ]);
-
-  // Update sync state to reflect what's now in Feishu
-  for (let i = 0; i < toCreate.length; i++) {
-    const { localId } = toCreate[i];
-    const feishuId = newIds[i];
-    localToFeishu.set(localId, feishuId);
-    feishuIds.add(feishuId);
-    const block = entry.blocks.find(b => b.id === localId);
-    if (block) lastSyncedBlocks.set(feishuId, { ...block });
-  }
-
-  for (const { record_id } of toUpdate) {
-    const block = entry.blocks.find(b => getFeishuId(b.id) === record_id);
-    if (block) lastSyncedBlocks.set(record_id, { ...block });
-  }
-
-  for (const fid of toDelete) {
-    lastSyncedBlocks.delete(fid);
-    feishuIds.delete(fid);
-  }
-}
-
-const ALL_LAYOUTS: PageLayout[] = ["a4", "letter", "a3-2col", "tablet-2col"];
-
-async function flush(entry: CacheEntry) {
-  if (entry.flushTimer !== null) {
-    clearTimeout(entry.flushTimer);
-    entry.flushTimer = null;
-  }
-
-  const d = entry.dirty;
-  entry.dirty = makeDirty();
-
-  const sceneOrder = new Map(entry.scenes.map((s, i) => [s.id, i]));
-  const charOrder = new Map(entry.characters.map((c, i) => [c.id, i]));
-
-  const result = await flushToDBVersioned(entry.scriptId, entry.versionId, {
-    upsertBlocks: Array.from(d.blocks.values()) as VersionedDbBlock[],
-    deleteSnapshotIds: Array.from(d.deletedSnapshotIds),
-    upsertChars: Array.from(d.chars.values()).map(c => ({ ...c, sortOrder: charOrder.get(c.id) ?? 0 })),
-    deleteCharIds: Array.from(d.deletedCharIds),
-    upsertScenes: Array.from(d.scenes.values()).map(s => ({ ...s, sortOrder: sceneOrder.get(s.id) ?? 0 })),
-    deleteSceneIds: Array.from(d.deletedSceneIds),
-  });
-
-  // Update snapshotIds in cache for any CoW'd blocks
-  for (const [blockId, newSnapshotId] of result.newSnapshotIds) {
-    const block = entry.blocks.find(b => b.id === blockId);
-    if (block) block.snapshotId = newSnapshotId;
-  }
-
-  // Non-blocking: compute and persist page map for all layouts after blocks are saved
-  const blocks: Block[] = entry.blocks.map(({ snapshotId: _sn, orderKey: _ok, lexKey: _lk, ...b }) => b);
-  savePageMap(
-    entry.scriptId,
-    Object.fromEntries(ALL_LAYOUTS.map(layout => [layout, computePageMap(blocks, layout)])),
-  ).catch(err => console.error("[page-map] save error:", err));
-
-  await flushToFeishu(entry).catch(err => {
-    console.error("[feishu] flush error:", err);
-  });
-}
-
-function scheduleRetry(entry: CacheEntry) {
-  if (entry.flushTimer !== null) return;
-  entry.flushTimer = setTimeout(() => flush(entry).catch(err => {
-    console.error("[db] retry flush error:", err);
-    entry.flushTimer = null;
-    scheduleRetry(entry);
-  }), RETRY_DELAY_MS);
+function broadcastPresence(key: string): void {
+  broadcast(key, presenceFrame(key));
 }
 
 // ─── Cue SSE ──────────────────────────────────────────────────────────────────
-
-const gCue = global as typeof globalThis & {
-  __cueSSERegistry?: Map<string, Map<string, SSEPush>>;
-};
-
-function cueSSEReg(): Map<string, Map<string, SSEPush>> {
-  if (!gCue.__cueSSERegistry) gCue.__cueSSERegistry = new Map();
-  return gCue.__cueSSERegistry;
-}
 
 export function registerCueSSE(productionId: string, clientId: string, push: SSEPush): () => void {
   const reg = cueSSEReg();
@@ -768,7 +207,7 @@ export function broadcastCueUpdate(productionId: string): void {
   }
 }
 
-// ─── Cue Presence ─────────────────────────────────────────────────────────────
+// ─── Cue presence ─────────────────────────────────────────────────────────────
 
 export type CuePresenceClient = {
   clientId: string;
@@ -778,15 +217,6 @@ export type CuePresenceClient = {
   cueId: string | null;
   updatedAt: number;
 };
-
-const gCuePres = global as typeof globalThis & {
-  __cuePresenceRegistry?: Map<string, Map<string, CuePresenceClient>>;
-};
-
-function cuePresReg(): Map<string, Map<string, CuePresenceClient>> {
-  if (!gCuePres.__cuePresenceRegistry) gCuePres.__cuePresenceRegistry = new Map();
-  return gCuePres.__cuePresenceRegistry;
-}
 
 function getCuePresence(productionId: string): CuePresenceClient[] {
   const clients = cuePresReg().get(productionId);

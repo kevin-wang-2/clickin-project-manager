@@ -1,7 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, patchCharacterMeta, setCharacterMembers, getActiveVersionId } from "@/lib/db";
+import {
+  getProductionMemberContext, patchCharacterMeta, setCharacterMembers,
+  getActiveVersionId, loadProduction, applyPatchToDB,
+} from "@/lib/db";
+import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -31,7 +34,7 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     return Response.json({ ok: true });
   }
 
-  // Metadata fields go directly to DB (not through cache)
+  // Metadata fields go directly to DB (not through patch)
   const hasMeta = "gender" in body || "biography" in body || "roleType" in body;
   if (hasMeta) {
     const meta: { gender?: string; biography?: string; roleType?: string } = {};
@@ -50,13 +53,14 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     return Response.json({ ok: true });
   }
 
-  // Structural fields (name, isAggregate) go through the cache
+  // Structural fields (name, isAggregate)
   const versionId = await getActiveVersionId(id) ?? '';
-  const state = getState(id, versionId);
-  const char = state.characters.find((c) => c.id === charId);
+  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+  const result = await loadProduction(id, versionId);
+  const char = result?.state.characters.find((c) => c.id === charId);
   if (!char) return Response.json({ error: "未找到角色" }, { status: 404 });
 
-  // name is optional — if omitted, keep existing
   const nameVal = typeof body.name === "string" ? body.name.trim() : char.name;
   if (!nameVal) return Response.json({ error: "名称不能为空" }, { status: 400 });
 
@@ -65,7 +69,11 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     name: nameVal,
     isAggregate: typeof body.isAggregate === "boolean" ? body.isAggregate : char.isAggregate,
   };
-  await applyPatch(id, versionId, { clientSeq: 0, blockOps: [], charOps: [{ op: "upsert", char: updated }], sceneOps: [] });
+  await applyPatchToDB(id, versionId, {
+    clientSeq: 0, blockOps: [], sceneOps: [],
+    charOps: [{ op: "upsert", char: updated }],
+  });
+  tickAndBroadcastSeq(id, versionId);
 
   // When converting to/from aggregate, clear member associations
   if (typeof body.isAggregate === "boolean" && body.isAggregate !== char.isAggregate) {
@@ -77,15 +85,20 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
 
 export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/production/[id]/characters/[charId]">) {
   const { id, charId } = await ctx.params;
-  const req = _req;
-  const { session, memberRoles, overrides, isArchived } = await getCtx(req, id);
+  const { session, memberRoles, overrides, isArchived } = await getCtx(_req, id);
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
   if (isArchived) return Response.json({ error: "已归档的项目不可修改" }, { status: 403 });
   if (!hasPermission("script:metadata", session.isAdmin, memberRoles, overrides)) {
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
-  const delVersionId = await getActiveVersionId(id) ?? '';
-  await applyPatch(id, delVersionId, { clientSeq: 0, blockOps: [], charOps: [{ op: "delete", id: charId }], sceneOps: [] });
+  const versionId = await getActiveVersionId(id) ?? '';
+  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+  await applyPatchToDB(id, versionId, {
+    clientSeq: 0, blockOps: [], sceneOps: [],
+    charOps: [{ op: "delete", id: charId }],
+  });
+  tickAndBroadcastSeq(id, versionId);
   return Response.json({ ok: true });
 }
