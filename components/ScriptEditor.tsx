@@ -4561,18 +4561,19 @@ export default function ScriptEditor({
       const idx = prev.findIndex((b) => b.id === id);
       if (idx === -1) return prev;
       const cur = prev[idx];
-      // New block inherits scene and rehearsal mark from the block being split
+      // New block inherits scene, rehearsal mark, and character from the block being split
       const next: Block = {
-        ...makeBlock(after, []),
+        ...makeBlock(after, cur.characterIds),
         sceneId: cur.sceneId,
         rehearsalMark: cur.rehearsalMark,
+        characterAnnotations: { ...cur.characterAnnotations },
       };
       nextId = next.id;
       const updated = [...prev];
       updated[idx] = { ...cur, content: before };
       updated.splice(idx + 1, 0, next);
       pendingFocus.current = { id: next.id, atEnd: false };
-      pendingCharOpen.current = next.id;
+      // Don't auto-open character picker: character is already inherited
       return updated;
     });
     if (nextId) inheritTags(id, nextId);
