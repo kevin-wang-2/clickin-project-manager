@@ -5002,111 +5002,115 @@ export default function ScriptEditor({
           >
             ← 返回
           </Link>
-          <div className="h-4 w-px shrink-0 bg-zinc-100" />
-
-          {/* 剧本▼ — 关于 + 元数据设置 */}
-          <div className="relative">
-            <button
-              onClick={() => toggleMenu("script")}
-              className="flex items-center gap-0.5 rounded px-1.5 py-1 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
-            >
-              剧本 <Chevron />
-            </button>
-            {openMenu === "script" && (
-              <div
-                className="absolute left-0 top-full z-30 mt-1 w-52 rounded-xl border border-zinc-100 bg-white py-1 shadow-md"
-                onMouseLeave={() => setOpenMenu(null)}
-              >
-                <button
-                  onClick={() => { setAboutOpen(true); setOpenMenu(null); }}
-                  className="w-full px-3 py-1.5 text-left text-sm text-zinc-600 hover:bg-zinc-50"
-                >
-                  关于
-                </button>
-                <div className="my-1 border-t border-zinc-50" />
-                <p className="px-3 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">段内舞台提示</p>
-                {(
-                  [
-                    ["（", "）", "（台词内）"],
-                    ["【", "】", "【台词内】"],
-                  ] as [string, string, string][]
-                ).map(([open, close, label]) => (
-                  <button
-                    key={open}
-                    onClick={() => { saveScriptConfig({ stageDelimOpen: open, stageDelimClose: close }); setOpenMenu(null); }}
-                    disabled={isLockedMode}
-                    className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-zinc-50 ${scriptConfig.stageDelimOpen === open ? "font-medium text-zinc-800" : "text-zinc-500"}`}
-                  >
-                    <span>{label}</span>
-                    {scriptConfig.stageDelimOpen === open && <span className="text-[10px] text-zinc-400">✓</span>}
-                  </button>
-                ))}
-                <div className="my-1 border-t border-zinc-50" />
-                <p className="px-3 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">页面类型</p>
-                {(
-                  [
-                    ["a4",         "A4"],
-                    ["letter",     "Letter"],
-                    ["a3-2col",    "A3 横排双排"],
-                    ["tablet-2col","Tablet 横排双排"],
-                  ] as [import("@/lib/script-types").PageLayout, string][]
-                ).map(([layout, label]) => (
-                  <button
-                    key={layout}
-                    onClick={() => { saveScriptConfig({ pageLayout: layout }); setOpenMenu(null); }}
-                    disabled={isLockedMode}
-                    className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-zinc-50 ${scriptConfig.pageLayout === layout ? "font-medium text-zinc-800" : "text-zinc-500"}`}
-                  >
-                    <span>{label}</span>
-                    {scriptConfig.pageLayout === layout && <span className="text-[10px] text-zinc-400">✓</span>}
-                  </button>
-                ))}
-                {productionId && !isLockedMode && (
-                  <>
-                    <div className="my-1 border-t border-zinc-50" />
-                    <button
-                      onClick={() => { setTagEditorOpen(true); setOpenMenu(null); }}
-                      className="w-full px-3 py-1.5 text-left text-sm text-zinc-600 hover:bg-zinc-50"
-                    >
-                      标签设置…
-                    </button>
-                    {canImport && (
-                      <>
-                        <div className="my-1 border-t border-zinc-50" />
-                        <Link
-                          href={`/production/${productionId}/import-script`}
-                          onNavigate={prepareForNavigation}
-                          className="block w-full px-3 py-1.5 text-left text-sm text-blue-600 hover:bg-zinc-50"
-                        >
-                          导入剧本内容…
-                        </Link>
-                      </>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-          {versions.length > 0 && productionId && (
+          {!isLockedMode && (
             <>
               <div className="h-4 w-px shrink-0 bg-zinc-100" />
-              <VersionSelector
-                productionId={productionId}
-                versions={versions}
-                currentVersionId={activeVersionId}
-                canManage={canManageVersions}
-                onNavigate={prepareForNavigation}
-                onChange={(vid) => {
-                  setActiveVersionId(vid);
-                  const ver = versions.find(v => v.id === vid);
-                  setVersionStatus(ver?.status ?? null);
-                }}
-              />
+
+              {/* 剧本▼ — 关于 + 元数据设置 */}
+              <div className="relative">
+                <button
+                  onClick={() => toggleMenu("script")}
+                  className="flex items-center gap-0.5 rounded px-1.5 py-1 text-sm text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-800"
+                >
+                  剧本 <Chevron />
+                </button>
+                {openMenu === "script" && (
+                  <div
+                    className="absolute left-0 top-full z-30 mt-1 w-52 rounded-xl border border-zinc-100 bg-white py-1 shadow-md"
+                    onMouseLeave={() => setOpenMenu(null)}
+                  >
+                    <button
+                      onClick={() => { setAboutOpen(true); setOpenMenu(null); }}
+                      className="w-full px-3 py-1.5 text-left text-sm text-zinc-600 hover:bg-zinc-50"
+                    >
+                      关于
+                    </button>
+                    <div className="my-1 border-t border-zinc-50" />
+                    <p className="px-3 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">段内舞台提示</p>
+                    {(
+                      [
+                        ["（", "）", "（台词内）"],
+                        ["【", "】", "【台词内】"],
+                      ] as [string, string, string][]
+                    ).map(([open, close, label]) => (
+                      <button
+                        key={open}
+                        onClick={() => { saveScriptConfig({ stageDelimOpen: open, stageDelimClose: close }); setOpenMenu(null); }}
+                        className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-zinc-50 ${scriptConfig.stageDelimOpen === open ? "font-medium text-zinc-800" : "text-zinc-500"}`}
+                      >
+                        <span>{label}</span>
+                        {scriptConfig.stageDelimOpen === open && <span className="text-[10px] text-zinc-400">✓</span>}
+                      </button>
+                    ))}
+                    <div className="my-1 border-t border-zinc-50" />
+                    <p className="px-3 pt-1 pb-0.5 text-[10px] font-medium tracking-wide text-zinc-400 uppercase">页面类型</p>
+                    {(
+                      [
+                        ["a4",         "A4"],
+                        ["letter",     "Letter"],
+                        ["a3-2col",    "A3 横排双排"],
+                        ["tablet-2col","Tablet 横排双排"],
+                      ] as [import("@/lib/script-types").PageLayout, string][]
+                    ).map(([layout, label]) => (
+                      <button
+                        key={layout}
+                        onClick={() => { saveScriptConfig({ pageLayout: layout }); setOpenMenu(null); }}
+                        className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-zinc-50 ${scriptConfig.pageLayout === layout ? "font-medium text-zinc-800" : "text-zinc-500"}`}
+                      >
+                        <span>{label}</span>
+                        {scriptConfig.pageLayout === layout && <span className="text-[10px] text-zinc-400">✓</span>}
+                      </button>
+                    ))}
+                    {productionId && (
+                      <>
+                        <div className="my-1 border-t border-zinc-50" />
+                        <button
+                          onClick={() => { setTagEditorOpen(true); setOpenMenu(null); }}
+                          className="w-full px-3 py-1.5 text-left text-sm text-zinc-600 hover:bg-zinc-50"
+                        >
+                          标签设置…
+                        </button>
+                        {canImport && (
+                          <>
+                            <div className="my-1 border-t border-zinc-50" />
+                            <Link
+                              href={`/production/${productionId}/import-script`}
+                              onNavigate={prepareForNavigation}
+                              className="block w-full px-3 py-1.5 text-left text-sm text-blue-600 hover:bg-zinc-50"
+                            >
+                              导入剧本内容…
+                            </Link>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
+          <div className={`flex shrink-0 items-center gap-1 ${isLockedMode ? "min-w-[200px]" : ""}`}>
+            {versions.length > 0 && productionId && (
+              <>
+                <div className="h-4 w-px shrink-0 bg-zinc-100" />
+                <VersionSelector
+                  productionId={productionId}
+                  versions={versions}
+                  currentVersionId={activeVersionId}
+                  canManage={canManageVersions}
+                  onNavigate={prepareForNavigation}
+                  onChange={(vid) => {
+                    setActiveVersionId(vid);
+                    const ver = versions.find(v => v.id === vid);
+                    setVersionStatus(ver?.status ?? null);
+                  }}
+                />
+              </>
+            )}
           <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-400">
-            {canEdit ? "可编辑" : "只读"}
-          </span>
+              {canEdit ? "可编辑" : "只读"}
+            </span>
+          </div>
           {!baseCanEdit && (
             <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-400">
               只读
