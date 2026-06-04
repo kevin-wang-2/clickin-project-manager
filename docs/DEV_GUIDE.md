@@ -215,6 +215,10 @@ CREATE TABLE IF NOT EXISTS something ( ... );
 
 执行完毕后，同步更新 `db/schema.sql`，将该变更合并进去（保持 schema.sql 始终是当前生产状态的完整快照）。
 
+> ⚠️ **严禁在应用代码（`lib/`、`app/`）中执行任何 DDL（`ALTER TABLE`、`CREATE TABLE`、`DROP`、`TRUNCATE` 等）。**
+>
+> 原因：应用 DB 用户（`script_editor`）以 `GRANT` 方式获得 DML 权限，但**不是表的 owner**，执行 DDL 会报 `must be owner of table`（PostgreSQL 42501），导致请求 500。所有 schema 变更必须通过 `db/add-*.sql` 由 CI 以 `postgres` 用户身份执行。
+
 ### Migration 文件的修改规则
 
 Migration 文件一经 commit，**只允许 chore 类修改**（注释、格式、typo），**不允许任何实质性的 SQL 修改**。
@@ -302,7 +306,7 @@ Agent 与主业务**完全隔离**，有严格限制：
 
 ### 步骤一：数据库（如需新表/字段）
 
-1. 在 `db/migrate-xxx.sql` 写 `ALTER TABLE` 或 `CREATE TABLE`。
+1. 在 `db/add-xxx.sql` 写 `ALTER TABLE` 或 `CREATE TABLE`。
 2. 在 `lib/` 对应的 `*-db.ts` 文件（或新建一个）里加查询函数。
 
 ### 步骤二：API
