@@ -86,13 +86,6 @@ type CharRow  = { id: string; name: string; sort_order: number; is_aggregate: bo
 // script_character uses snapshot_id as the script_id FK
 type ScCharRow = { script_id: string; character_id: string; annotation: string | null };
 
-let scriptForceShowColumnReady: Promise<void> | null = null;
-function ensureScriptForceShowColumn(): Promise<void> {
-  scriptForceShowColumnReady ??= getPool()
-    .query("ALTER TABLE script ADD COLUMN IF NOT EXISTS force_show_character_name BOOLEAN NOT NULL DEFAULT FALSE")
-    .then(() => undefined);
-  return scriptForceShowColumnReady;
-}
 
 // ─── Version CRUD ─────────────────────────────────────────────────────────────
 
@@ -402,7 +395,6 @@ export type ProductionState = {
  * Returns null if the production doesn't exist.
  */
 export async function loadProduction(productionId: string, versionId: string): Promise<ProductionState | null> {
-  await ensureScriptForceShowColumn();
   const pool = getPool();
 
   const [[blocksRes, scenesRes, charsRes], prodRes] = await Promise.all([
@@ -533,7 +525,6 @@ export async function flushToDBVersioned(
   versionId: string,
   payload: VersionedFlushPayload,
 ): Promise<VersionedFlushResult> {
-  await ensureScriptForceShowColumn();
   const { upsertBlocks, deleteSnapshotIds, upsertChars, deleteCharIds, upsertScenes, deleteSceneIds } = payload;
   const newSnapshotIds = new Map<string, string>();
 
@@ -778,7 +769,6 @@ export async function flushToDBVersioned(
 /** Legacy flush used by management pages (import-script, import-scenes).
  *  Operates on the active editing version; no CoW for blocks. */
 export async function flushToDB(productionId: string, payload: FlushPayload): Promise<void> {
-  await ensureScriptForceShowColumn();
   const { upsertBlocks, deleteBlockIds, upsertChars, deleteCharIds, upsertScenes, deleteSceneIds } = payload;
   if (!upsertBlocks.length && !deleteBlockIds.length && !upsertChars.length &&
       !deleteCharIds.length && !upsertScenes.length && !deleteSceneIds.length) return;
@@ -973,7 +963,6 @@ export async function importScriptToVersion(
     upsertScenes: Array<{ id: string; number: string; name: string; parentId: string | null; sortOrder: number }>;
   },
 ): Promise<void> {
-  await ensureScriptForceShowColumn();
   const { upsertBlocks, upsertChars, upsertScenes } = payload;
   const client = await getPool().connect();
   try {
@@ -2821,7 +2810,6 @@ export async function cowBlockSnapshotForMount(
   snapshotId: string,
   mode: 'tracking' | 'version_only',
 ): Promise<string> {
-  await ensureScriptForceShowColumn();
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
