@@ -1,7 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, listCharactersByVersion, setCharacterMembers, getActiveVersionId } from "@/lib/db";
+import {
+  getProductionMemberContext, listCharactersByVersion, setCharacterMembers,
+  getActiveVersionId, loadProduction, applyPatchToDB,
+} from "@/lib/db";
+import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -41,14 +44,22 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
     : [];
 
   const versionId = await getActiveVersionId(id) ?? '';
-  const state = getState(id, versionId);
-  const newChar = { id: `c${Date.now().toString(36)}`, name: trimmed, isAggregate };
-  // check duplicate
-  if (state.characters.some((c) => c.name === trimmed)) {
+  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+  // Load current characters to check for duplicates
+  const result = await loadProduction(id, versionId);
+  const characters = result?.state.characters ?? [];
+  if (characters.some((c) => c.name === trimmed)) {
     return Response.json({ error: "角色名已存在" }, { status: 409 });
   }
 
-  await applyPatch(id, versionId, { clientSeq: 0, blockOps: [], charOps: [{ op: "upsert", char: newChar }], sceneOps: [] });
+  const newChar = { id: `c${Date.now().toString(36)}`, name: trimmed, isAggregate };
+  await applyPatchToDB(id, versionId, {
+    clientSeq: 0, blockOps: [], sceneOps: [],
+    charOps: [{ op: "upsert", char: newChar }],
+  });
+  tickAndBroadcastSeq(id, versionId);
+
   if (isAggregate && memberIds.length > 0) {
     await setCharacterMembers(newChar.id, memberIds);
   }

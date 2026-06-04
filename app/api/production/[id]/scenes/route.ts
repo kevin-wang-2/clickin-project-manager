@@ -1,7 +1,10 @@
 import { type NextRequest } from "next/server";
-import { getState, applyPatch } from "@/lib/server-cache";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, listProductionScenes, listScenesByVersion, getActiveVersionId } from "@/lib/db";
+import {
+  getProductionMemberContext, listProductionScenes, listScenesByVersion,
+  getActiveVersionId, loadProduction, applyPatchToDB,
+} from "@/lib/db";
+import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -38,11 +41,15 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   const parentId = typeof body.parentId === "string" ? body.parentId        : null;
 
   const versionId = await getActiveVersionId(id) ?? '';
-  const state = getState(id, versionId);
+  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+
+  // Load current scene list from DB to compute insertion position
+  const result = await loadProduction(id, versionId);
+  const scenes = result ? [...result.state.scenes] : [];
+
   const newScene = { id: `s${Date.now().toString(36)}`, number, name, parentId };
 
-  // Build a reordered list: insert sub-scene after its parent's last child, or at end for acts
-  const scenes = [...state.scenes];
+  // Insert sub-scene after its parent's last child, or at end for acts
   if (parentId) {
     let insertAfter = scenes.findIndex((s) => s.id === parentId);
     for (let i = insertAfter + 1; i < scenes.length; i++) {
@@ -54,7 +61,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
     scenes.push(newScene);
   }
 
-  await applyPatch(id, versionId, {
+  await applyPatchToDB(id, versionId, {
     clientSeq: 0,
     blockOps: [],
     charOps: [],
@@ -63,6 +70,8 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
       { op: "reorder", ids: scenes.map((s) => s.id) },
     ],
   });
+  tickAndBroadcastSeq(id, versionId);
+
   const sceneDetail = { ...newScene, synopsis: "", actionLine: "", music: "", stageNotes: "", expectedDuration: "" };
   return Response.json({ ok: true, scene: sceneDetail }, { status: 201 });
 }

@@ -1,8 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getActiveVersionId } from "@/lib/db";
+import { getProductionMemberContext, getActiveVersionId, loadProduction } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import { getState } from "@/lib/server-cache";
 import { computePageMap } from "@/lib/script-page";
 
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/script/[id]/pages">) {
@@ -14,6 +13,7 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/script/[id]/
     return Response.json({ error: "无权访问" }, { status: 403 });
   }
   const versionId = req.nextUrl.searchParams.get("v") ?? await getActiveVersionId(id) ?? '';
-  const { blocks } = getState(id, versionId);
+  const result = await loadProduction(id, versionId);
+  const blocks = result?.state.blocks ?? [];
   return Response.json({ pageMap: computePageMap(blocks) });
 }

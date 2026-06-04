@@ -1,9 +1,8 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getActiveVersionId } from "@/lib/db";
+import { getProductionMemberContext, getActiveVersionId, saveScriptConfig } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
-import { saveScriptConfig } from "@/lib/db";
-import { applyConfig } from "@/lib/server-cache";
+import { broadcastEvent } from "@/lib/server-cache";
 import type { ScriptConfig } from "@/lib/script-types";
 import { DEFAULT_SCRIPT_CONFIG } from "@/lib/script-types";
 
@@ -23,7 +22,8 @@ export async function PUT(req: NextRequest, ctx: RouteContext<"/api/script/[id]/
   const config: ScriptConfig = { ...DEFAULT_SCRIPT_CONFIG, ...body };
 
   await saveScriptConfig(id, config);
-  applyConfig(id, versionId, config);
+  // Broadcast config change to all connected SSE clients for this version
+  broadcastEvent(id, versionId, "config", config);
 
   return Response.json({ ok: true });
 }
