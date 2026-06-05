@@ -19,6 +19,8 @@ export type SheetData = {
 
 /** Identifies a column by its index (0-based) in the sheet. */
 export type ColRef = number;
+export type StageDelimiterPattern = "（）" | "【】" | "()" | "[]";
+export type ScriptConfigStageDelimiterPattern = "（）" | "【】";
 
 // Scene Info columns
 export type SceneColMap = {
@@ -40,9 +42,9 @@ export type ScriptColMap = {
   stageComment?: ColRef;
   bodyColumns: ColRef[];   // one or more body columns, concatenated in order
   stageInlineColumns?: ColRef[]; // subset of bodyColumns treated as inline stage directions
-  /** Bracket patterns in body text that are extracted as stage direction blocks.
+  /** Bracket patterns in body text that are normalized as inline stage directions.
    *  Supported values: "（）" "【】" "()" "[]" */
-  stageInlinePatterns?: string[];
+  stageInlinePatterns?: StageDelimiterPattern[];
 };
 
 /** For each aggregate character: which base-character names are its members. */

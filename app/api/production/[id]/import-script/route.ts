@@ -2,11 +2,11 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { TOKEN_COOKIE } from "@/lib/feishu-auth";
 import { getSheetValues } from "@/lib/import/feishu-sheet";
-import { getProductionMemberContext, listProductionScenes, listCharactersByVersion, importScriptToVersion, getVersion, getActiveVersionId, setCharacterMembers, bulkUpsertBlockTags, listTagGroups } from "@/lib/db";
+import { getProductionMemberContext, listProductionScenes, listCharactersByVersion, importScriptToVersion, getVersion, getActiveVersionId, setCharacterMembers, bulkUpsertBlockTags, listTagGroups, saveScriptStageDelimiters } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { parseSceneNum } from "@/lib/import/parse-scene-num";
 import { parseCharacter, collectCharacters, guessIsAggregate } from "@/lib/import/parse-character";
-import type { ScriptColMap, TypeTagMapping, ImportScriptPreview, AggregateMembers } from "@/lib/import/types";
+import type { ScriptColMap, TypeTagMapping, ImportScriptPreview, AggregateMembers, StageDelimiterPattern, ScriptConfigStageDelimiterPattern } from "@/lib/import/types";
 import { initialKeys } from "@/lib/lex-order";
 import { randomUUID } from "node:crypto";
 
@@ -31,10 +31,20 @@ type ImportScriptBody = {
   characterKinds?: Record<string, "normal" | "aggregate">;
   /** For aggregate characters: which base-character names are members */
   aggregateMembers?: AggregateMembers;
+  stageDelimiterPattern?: ScriptConfigStageDelimiterPattern;
   headerRowIncluded?: boolean;
 };
 
 const REHEARSAL_MARK_RE = /^[A-Za-z]\d*$|^\d+[A-Za-z]?$/;
+const STAGE_DELIMITERS: Record<StageDelimiterPattern, { open: string; close: string }> = {
+  "（）": { open: "（", close: "）" },
+  "【】": { open: "【", close: "】" },
+  "()": { open: "(", close: ")" },
+  "[]": { open: "[", close: "]" },
+};
+const STAGE_DELIMITER_PATTERNS = Object.keys(STAGE_DELIMITERS) as StageDelimiterPattern[];
+type StageDelimiter = { open: string; close: string };
+type StageDelimiterReplacement = { regex: RegExp; replacement: string };
 
 
 function getCell(row: (string | null)[], col: number | undefined): string | null {
@@ -42,10 +52,53 @@ function getCell(row: (string | null)[], col: number | undefined): string | null
   return row[col]?.trim() || null;
 }
 
+function getStageDelimiter(pattern: ScriptConfigStageDelimiterPattern | undefined) {
+  return pattern === "【】" ? STAGE_DELIMITERS["【】"] : STAGE_DELIMITERS["（）"];
+}
+
+function stripOuterStageDelimiter(text: string): string {
+  const trimmed = text.trim();
+  for (const { open, close } of Object.values(STAGE_DELIMITERS)) {
+    if (trimmed.startsWith(open) && trimmed.endsWith(close) && trimmed.length >= open.length + close.length) {
+      return trimmed.slice(open.length, trimmed.length - close.length).trim();
+    }
+  }
+  return trimmed;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildStageDelimiterReplacements(target: StageDelimiter, patterns: StageDelimiterPattern[]): StageDelimiterReplacement[] {
+  return patterns.flatMap((pattern) => {
+    const source = STAGE_DELIMITERS[pattern];
+    if (source.open === target.open && source.close === target.close) return [];
+    return [{
+      regex: new RegExp(
+        `${escapeRegExp(source.open)}([^${escapeRegExp(source.open + source.close)}\\n]*)${escapeRegExp(source.close)}`,
+        "g",
+      ),
+      replacement: `${target.open}$1${target.close}`,
+    }];
+  });
+}
+
+function normalizeStageDelimiters(text: string, replacements: StageDelimiterReplacement[]): string {
+  let next = text;
+  for (const { regex, replacement } of replacements) {
+    next = next.replace(regex, replacement);
+  }
+  return next;
+}
+
 /** Parse rows into intermediate import records */
 function parseRows(rows: (string | null)[][], body: Omit<ImportScriptBody, "spreadsheetToken" | "sheetId" | "rowCount">) {
   const { colMap, typeTagMapping, characterKinds, headerRowIncluded } = body;
   const dataRows = headerRowIncluded ? rows.slice(1) : rows;
+  const stageDelimiter = getStageDelimiter(body.stageDelimiterPattern);
+  const bodyDelimiterReplacements = buildStageDelimiterReplacements(stageDelimiter, colMap.stageInlinePatterns ?? []);
+  const stageCommentDelimiterReplacements = buildStageDelimiterReplacements(stageDelimiter, STAGE_DELIMITER_PATTERNS);
 
   type ParsedRow = {
     sceneNum: string;
@@ -85,10 +138,14 @@ function parseRows(rows: (string | null)[][], body: Omit<ImportScriptBody, "spre
       const val = getCell(row, col);
       if (!val) return null;
       const isStage = colMap.stageInlineColumns?.includes(col);
-      return isStage ? `（${val}）` : val;
+      const normalized = normalizeStageDelimiters(val, bodyDelimiterReplacements);
+      return isStage ? `${stageDelimiter.open}${normalized}${stageDelimiter.close}` : normalized;
     }).filter(Boolean);
     const body = bodyParts.join("\n");
-    const stageComment = getCell(row, colMap.stageComment);
+    const rawStageComment = getCell(row, colMap.stageComment);
+    const stageComment = rawStageComment
+      ? normalizeStageDelimiters(stripOuterStageDelimiter(rawStageComment), stageCommentDelimiterReplacements)
+      : null;
 
     // Characters
     const rawCharCell = getCell(row, colMap.character);
@@ -183,6 +240,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const rawRows = await getSheetValues(body.spreadsheetToken, body.sheetId, userToken, body.rowCount);
   const { rows: parsed } = parseRows(rawRows, body);
+  const stageDelimiter = getStageDelimiter(body.stageDelimiterPattern);
+  const stageBlockDelimiterReplacements = buildStageDelimiterReplacements(stageDelimiter, STAGE_DELIMITER_PATTERNS);
 
   const [existingChars, existingScenes, tagGroups] = await Promise.all([
     listCharactersByVersion(versionId),
@@ -324,11 +383,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
 
     if (!row.body.trim()) continue;
+    const content = baseType === "stage"
+      ? normalizeStageDelimiters(stripOuterStageDelimiter(row.body), stageBlockDelimiterReplacements)
+      : row.body;
     blockSpecs.push({
       sceneId,
       blockType: baseType,
       lyric,
-      content: row.body,
+      content,
       charIds,
       characterAnnotations,
       stageComment: baseType === "stage" ? null : row.stageComment,
@@ -366,6 +428,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     upsertChars,
     upsertScenes: upsertScenesFromScript,
   });
+
+  await saveScriptStageDelimiters(productionId, stageDelimiter.open, stageDelimiter.close);
 
   // Set aggregate member associations
   if (body.aggregateMembers) {

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { BASE_PATH } from "@/lib/base-path";
 import SheetPicker from "./SheetPicker";
 import ColumnMapper from "./ColumnMapper";
-import type { SheetMeta, SheetData, ScriptColMap, TypeTagMapping, TypeAction, ImportScriptPreview, AggregateMembers } from "@/lib/import/types";
+import type { SheetMeta, SheetData, ScriptColMap, TypeTagMapping, TypeAction, ImportScriptPreview, AggregateMembers, StageDelimiterPattern, ScriptConfigStageDelimiterPattern } from "@/lib/import/types";
 
 type Step = "sheet" | "columns" | "types" | "characters" | "aggregates" | "preview" | "done";
 
@@ -17,6 +17,8 @@ type Props = {
 const BLOCK_TYPE_LABELS: Record<string, string> = {
   dialogue: "台词", stage: "舞台提示", lyric: "歌词",
 };
+const STAGE_DELIMITER_PATTERNS: StageDelimiterPattern[] = ["（）", "【】", "()", "[]"];
+const SCRIPT_CONFIG_STAGE_DELIMITER_PATTERNS: ScriptConfigStageDelimiterPattern[] = ["（）", "【】"];
 
 /** Client-side character parsing — mirrors lib/import/parse-character.ts */
 function parseCharName(raw: string): { name: string; note: string | null } {
@@ -54,7 +56,8 @@ export default function ImportScriptWizard({ productionId, versionId, onDone }: 
     sceneNum: null, rehearsalMark: null, typeTag: null,
     character: null, stageComment: null, bodyColumns: [], stageInlineColumns: [],
   });
-  const [stageInlinePatterns, setStageInlinePatterns] = useState<string[]>([]);
+  const [stageInlinePatterns, setStageInlinePatterns] = useState<StageDelimiterPattern[]>([]);
+  const [stageDelimiterPattern, setStageDelimiterPattern] = useState<ScriptConfigStageDelimiterPattern>("（）");
 
   const [typeValues, setTypeValues] = useState<string[]>([]);
   const [typeTagMapping, setTypeTagMapping] = useState<TypeTagMapping>({});
@@ -250,7 +253,10 @@ export default function ImportScriptWizard({ productionId, versionId, onDone }: 
       const res = await fetch(`${BASE_PATH}/api/production/${productionId}/import-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spreadsheetToken, sheetId: selectedSheet!.sheetId, rowCount: selectedSheet!.rowCount, colMap, typeTagMapping, characterKinds, headerRowIncluded: false }),
+        body: JSON.stringify({
+          spreadsheetToken, sheetId: selectedSheet!.sheetId, rowCount: selectedSheet!.rowCount,
+          colMap, stageDelimiterPattern, typeTagMapping, characterKinds, headerRowIncluded: false,
+        }),
       });
       const data = await res.json() as { preview?: ImportScriptPreview; error?: string };
       if (!res.ok || data.error) { setError(data.error ?? "预览失败"); setPreviewLoading(false); return; }
@@ -282,7 +288,7 @@ export default function ImportScriptWizard({ productionId, versionId, onDone }: 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           spreadsheetToken, sheetId: selectedSheet!.sheetId, rowCount: selectedSheet!.rowCount,
-          colMap, typeTagMapping, characterKinds, aggregateMembers, headerRowIncluded: false,
+          colMap, stageDelimiterPattern, typeTagMapping, characterKinds, aggregateMembers, headerRowIncluded: false,
         }),
       });
       const data = await res.json() as { blocksImported?: number; charsAdded?: number; sceneSummary?: SceneSummaryItem[]; error?: string };
@@ -375,21 +381,39 @@ export default function ImportScriptWizard({ productionId, versionId, onDone }: 
           {/* Inline stage direction patterns */}
           <div className="rounded border border-gray-200 p-3 space-y-2">
             <p className="text-sm font-medium text-gray-700">段内舞台提示识别</p>
-            <p className="text-xs text-gray-500">选中后，正文中符合括号格式的文字将自动拆分为单独的舞台提示行</p>
-            <div className="flex flex-wrap gap-4">
-              {(["（）", "【】", "()", "[]"] as const).map(pat => (
-                <label key={pat} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={stageInlinePatterns.includes(pat)}
-                    onChange={e => setStageInlinePatterns(ps =>
-                      e.target.checked ? [...ps, pat] : ps.filter(p => p !== pat)
-                    )}
-                    className="rounded"
-                  />
-                  <code className="text-xs bg-gray-100 px-1 rounded">{pat}</code>
-                </label>
-              ))}
+            <div className="space-y-2 text-sm">
+              <span className="text-gray-500">将原剧本中用于标记段内舞台提示使用的括号</span>
+              <div className="flex flex-wrap items-center gap-3">
+                {STAGE_DELIMITER_PATTERNS.map(pat => (
+                  <label key={pat} className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={stageInlinePatterns.includes(pat)}
+                      onChange={e => setStageInlinePatterns(ps =>
+                        e.target.checked ? [...ps, pat] : ps.filter(p => p !== pat)
+                      )}
+                      className="rounded"
+                    />
+                    <code className="text-xs bg-gray-100 px-1 rounded">{pat}</code>
+                  </label>
+                ))}
+                <span className="text-xs text-gray-400">不定项选择</span>
+              </div>
+              <span className="block text-gray-500">统一替换为</span>
+              <div className="flex flex-wrap items-center gap-3">
+                {SCRIPT_CONFIG_STAGE_DELIMITER_PATTERNS.map(pat => (
+                  <label key={pat} className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="stage-delimiter-pattern"
+                      checked={stageDelimiterPattern === pat}
+                      onChange={() => setStageDelimiterPattern(pat)}
+                    />
+                    <code className="text-xs bg-gray-100 px-1 rounded">{pat}</code>
+                  </label>
+                ))}
+                <span className="text-xs text-gray-400">单项选择</span>
+              </div>
             </div>
           </div>
 
