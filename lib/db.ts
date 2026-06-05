@@ -522,6 +522,13 @@ export async function saveScriptConfig(productionId: string, config: ScriptConfi
   );
 }
 
+export async function saveScriptStageDelimiters(productionId: string, stageDelimOpen: string, stageDelimClose: string): Promise<void> {
+  await getPool().query(
+    "UPDATE production SET script_config = script_config || $1::jsonb WHERE id = $2",
+    [JSON.stringify({ stageDelimOpen, stageDelimClose }), productionId]
+  );
+}
+
 /** Load the pre-computed page map for a production (keyed by layout → blockId → page). */
 export async function loadPageMap(productionId: string): Promise<Record<string, Record<string, number>> | null> {
   const res = await getPool().query<{ page_map: Record<string, Record<string, number>> | null }>(
