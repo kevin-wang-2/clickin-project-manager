@@ -403,11 +403,45 @@ function htmlToMd(html: string): string {
   return Array.from(tmp.childNodes).map(nodeToMd).join("").replace(/\n$/, "");
 }
 
-function mdToHtml(md: string): string {
+const stagePairRegexCache = new Map<string, RegExp>();
+
+function stageDelimiterPairs(delimOpen = "（", delimClose = "）"): [string, string][] {
+  const pairs: [string, string][] = [["(", ")"], ["（", "）"], ["【", "】"]];
+  if (delimOpen && delimClose && !pairs.some(([open, close]) => open === delimOpen && close === delimClose)) {
+    pairs.push([delimOpen, delimClose]);
+  }
+  return pairs;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stagePairRegex(delimOpen = "（", delimClose = "）"): RegExp {
+  const cacheKey = `${delimOpen}\u0000${delimClose}`;
+  const cached = stagePairRegexCache.get(cacheKey);
+  if (cached) return cached;
+  const pairs = stageDelimiterPairs(delimOpen, delimClose);
+  const regex = new RegExp(
+    pairs
+      .map(([open, close]) => `${escapeRegex(open)}[^${escapeRegex(close)}\n]*${escapeRegex(close)}`)
+      .join("|"),
+    "g"
+  );
+  stagePairRegexCache.set(cacheKey, regex);
+  return regex;
+}
+
+function mdToHtml(md: string, delimOpen = "（", delimClose = "）"): string {
   let s = md
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+  const pairRegex = stagePairRegex(delimOpen, delimClose);
+  pairRegex.lastIndex = 0;
+  s = s.replace(pairRegex, (match) =>
+    `<span data-stage-inline="">${match}</span>`
+  );
   // Collapse 3+ consecutive * or _ to exactly 2, so nested markers from old
   // double-bold bugs render as a single level instead of mis-parsing.
   s = s.replace(/\*{3,}/g, "**").replace(/_{3,}/g, "__");
@@ -473,6 +507,33 @@ function wrapSelectionAsInlineStageCue(
   delimClose: string,
 ): void {
   const frag = range.extractContents();
+  const tmp = document.createElement("div");
+  tmp.appendChild(frag.cloneNode(true));
+  const selectedMd = htmlToMd(tmp.innerHTML);
+  if (selectedMd.includes("\n")) {
+    const wrappedMd = selectedMd
+      .split("\n")
+      .map((line) => line ? `${delimOpen}${line}${delimClose}` : line)
+      .join("\n");
+    const html = mdToHtml(wrappedMd, delimOpen, delimClose);
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = html;
+    const replacement = document.createDocumentFragment();
+    while (wrapper.firstChild) replacement.appendChild(wrapper.firstChild);
+    const last = replacement.lastChild;
+    range.insertNode(replacement);
+
+    const sel = window.getSelection();
+    if (last) {
+      const after = document.createRange();
+      after.setStartAfter(last);
+      after.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(after);
+    }
+    return;
+  }
+
   const span = document.createElement("span");
   span.setAttribute("data-stage-inline", "");
   span.style.fontStyle = "italic";
@@ -500,10 +561,10 @@ function applyInlineStageStyling(div: HTMLDivElement, delimOpen = "（", delimCl
   const isStageSpan = (el: Element) =>
     el.hasAttribute("data-stage-inline");
 
-  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const validStageText = (text: string) =>
-    ((text.startsWith("(") && text.endsWith(")")) ||
-     (text.startsWith(delimOpen) && text.endsWith(delimClose))) &&
+    stageDelimiterPairs(delimOpen, delimClose).some(([open, close]) =>
+      text.startsWith(open) && text.endsWith(close)
+    ) &&
     text.length >= 2;
 
   // Remove spans whose content no longer forms a valid pair
@@ -531,12 +592,7 @@ function applyInlineStageStyling(div: HTMLDivElement, delimOpen = "（", delimCl
     if (!inside) textNodes.push(node as Text);
   }
 
-  const escapedOpen = esc(delimOpen);
-  const escapedClose = esc(delimClose);
-  const innerExclude = delimOpen === "（" ? "[^()（）\n]" : `[^${esc("()")}${esc(delimOpen + delimClose)}\n]`;
-  const pairRegex = new RegExp(
-    `\\([^()（）\n]*\\)|${escapedOpen}${innerExclude}*${escapedClose}`, "g"
-  );
+  const pairRegex = stagePairRegex(delimOpen, delimClose);
 
   for (const textNode of textNodes) {
     const text = textNode.textContent ?? "";
@@ -2023,6 +2079,9 @@ function PrintPreview({
   ) => {
     const isStage = block.type === "stage";
     const sel = characters.filter((c) => block.characterIds.includes(c.id));
+    const content = !isStage && sel.length > 0 && block.stageComment?.trim()
+      ? `${block.stageComment.trim().split(/\r\n|\r|\n/).map((line) => `${stageDelimOpen}${line}${stageDelimClose}`).join("\n")}\n${block.content}`
+      : block.content;
     const blockPaddingClass = isStage
       ? "py-0"
       : hideChar
@@ -2036,11 +2095,6 @@ function PrintPreview({
             {sel.map((c) => { const ann = block.characterAnnotations[c.id]; return ann ? `${c.name}（${ann}）` : c.name; }).join("、")}
           </div>
         )}
-        {!isStage && sel.length > 0 && block.stageComment?.trim() && (
-          <div className="mb-0.5 w-full text-center font-stage text-sm italic text-zinc-500">
-            {stageDelimOpen}{block.stageComment.trim()}{stageDelimClose}
-          </div>
-        )}
         <div
           className={`w-full break-words text-sm leading-7 ${
             isStage
@@ -2049,7 +2103,7 @@ function PrintPreview({
               ? "font-lyric text-center font-bold uppercase text-zinc-800"
               : "font-script text-center text-zinc-800"
           }`}
-          dangerouslySetInnerHTML={{ __html: mdToHtml(block.content) || "　" }}
+          dangerouslySetInnerHTML={{ __html: mdToHtml(content, stageDelimOpen, stageDelimClose) || "　" }}
         />
       </div>
     );

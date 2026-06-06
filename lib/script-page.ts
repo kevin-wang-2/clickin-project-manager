@@ -37,7 +37,6 @@ export const PAGE_CONFIGS: Record<PageLayout, PageConfig> = {
 const LINE_HEIGHT    = 28;  // leading-7 (1.75rem)
 const FONT_SIZE      = 14;  // text-sm (0.875rem at 16px base)
 const CHAR_NAME_HEIGHT   = 22;  // text-sm (20px) + mb-0.5 (2px)
-const STAGE_COMMENT_HEIGHT = 22; // text-sm (20px) + mb-0.5 (2px)
 const SCENE_HEADER_HEIGHT = 44; // py-3 (24px) + text-sm content (20px)
 
 function contentWidth(cfg: PageConfig): number {
@@ -95,18 +94,17 @@ function charNameHidden(block: Block, prev: Block | null): boolean {
 
 function estimateBlockHeight(block: Block, prev: Block | null, upl: number, forceCharName = false): number {
   const text = stripHtml(block.content);
-  const lines = estimateLines(text, upl);
+  const stageComment = (block.stageComment ?? "").trim();
+  const stageCommentText = block.type === "dialogue" && block.characterIds.length > 0 && stageComment
+    ? stageComment.split(/\r\n|\r|\n/).map(line => `（${line}）`).join("\n")
+    : "";
+  const lines = estimateLines(stageCommentText ? `${stageCommentText}\n${text}` : text, upl);
   const hideCharName = !forceCharName && charNameHidden(block, prev);
   const charNameH =
     block.type === "dialogue" && block.characterIds.length > 0 && (forceCharName || !hideCharName)
       ? CHAR_NAME_HEIGHT : 0;
-  const stageCommentH =
-    block.type === "dialogue" &&
-    block.characterIds.length > 0 &&
-    (block.stageComment ?? "").trim()
-      ? STAGE_COMMENT_HEIGHT : 0;
   const wrapperPaddingH = block.type === "stage" || hideCharName ? 0 : 8; // 8px = py-1 wrapper
-  return charNameH + stageCommentH + lines * LINE_HEIGHT + wrapperPaddingH;
+  return charNameH + lines * LINE_HEIGHT + wrapperPaddingH;
 }
 
 /**
