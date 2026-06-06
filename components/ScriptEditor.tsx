@@ -1594,10 +1594,10 @@ function BlockStageComment({
   stageDelimClose,
   layoutMode = "center",
   placementClassName = "",
-  placementStyle,
   onEditingChange,
   addButtonCenter = false,
   alignFirstLineToEnd = false,
+  alignAddButtonToLineAnchor = false,
   onOverflowBelowChange,
   addButtonRevealOnHover = false,
   lineAnchorCenter,
@@ -1613,10 +1613,10 @@ function BlockStageComment({
   stageDelimClose: string;
   layoutMode?: ScriptTextLayoutMode;
   placementClassName?: string;
-  placementStyle?: React.CSSProperties;
   onEditingChange?: (editing: boolean) => void;
   addButtonCenter?: boolean;
   alignFirstLineToEnd?: boolean;
+  alignAddButtonToLineAnchor?: boolean;
   onOverflowBelowChange?: (height: number) => void;
   addButtonRevealOnHover?: boolean;
   lineAnchorCenter?: number;
@@ -1628,6 +1628,7 @@ function BlockStageComment({
   const skipBlurCommitRef = useRef(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement | null>(null);
   const [lineAnchorShift, setLineAnchorShift] = useState(0);
   const text = value?.trim() ?? "";
 
@@ -1649,11 +1650,9 @@ function BlockStageComment({
   const alignClass = compactLayout ? "justify-start text-left" : "justify-center text-center";
   const addButtonAlignClass = addButtonCenter ? "justify-center" : alignClass;
   const stageCommentTextClass = `font-stage text-sm italic text-zinc-400 ${compactLayout ? "text-left leading-tight" : ""} whitespace-pre-wrap`;
-  const rootStyle: React.CSSProperties | undefined = alignFirstLineToEnd && lineAnchorShift !== 0
+  const rootStyle: React.CSSProperties | undefined = (alignFirstLineToEnd || alignAddButtonToLineAnchor) && lineAnchorShift !== 0
     ? { transform: `translateY(${lineAnchorShift}px)` }
     : undefined;
-  const combinedRootStyle: React.CSSProperties | undefined =
-    rootStyle || placementStyle ? { ...placementStyle, ...rootStyle } : undefined;
   const addButtonStyle: React.CSSProperties | undefined = zeroHeightAddButton
     ? { transform: "translateY(-0.75rem)" }
     : undefined;
@@ -1667,7 +1666,7 @@ function BlockStageComment({
   }, [editing, draft]);
 
   useLayoutEffect(() => {
-    if (!alignFirstLineToEnd) {
+    if (!alignFirstLineToEnd && !alignAddButtonToLineAnchor) {
       setLineAnchorShift(0);
       onOverflowBelowChange?.(0);
       return;
@@ -1675,12 +1674,20 @@ function BlockStageComment({
     const el = rootRef.current;
     if (!el) return;
     const measure = () => {
-      const body = el.querySelector<HTMLElement>("[data-stage-comment-body='true']");
-      if (!body) return;
+      const target = alignFirstLineToEnd
+        ? el.querySelector<HTMLElement>("[data-stage-comment-body='true']")
+        : addButtonRef.current;
+      if (!target) {
+        setLineAnchorShift(0);
+        onOverflowBelowChange?.(0);
+        return;
+      }
       const rootRect = el.getBoundingClientRect();
-      const bodyRect = body.getBoundingClientRect();
-      const lineHeight = parseFloat(window.getComputedStyle(body).lineHeight);
-      const firstLineCenter = bodyRect.top - rootRect.top + (Number.isFinite(lineHeight) ? lineHeight : bodyRect.height) / 2;
+      const targetRect = target.getBoundingClientRect();
+      const lineHeight = alignFirstLineToEnd
+        ? parseFloat(window.getComputedStyle(target).lineHeight)
+        : targetRect.height;
+      const firstLineCenter = targetRect.top - rootRect.top + (Number.isFinite(lineHeight) ? lineHeight : targetRect.height) / 2;
       if (lineAnchorCenter === undefined) {
         setLineAnchorShift(0);
         onOverflowBelowChange?.(0);
@@ -1689,17 +1696,31 @@ function BlockStageComment({
       const shift = Math.round(lineAnchorCenter - firstLineCenter);
       const rowHeight = Math.max(lineAnchorRowHeight ?? 0, rootRect.height);
       setLineAnchorShift(shift);
-      onOverflowBelowChange?.(Math.max(0, Math.ceil(shift + rootRect.height - rowHeight)));
+      onOverflowBelowChange?.(
+        alignFirstLineToEnd ? Math.max(0, Math.ceil(shift + rootRect.height - rowHeight)) : 0
+      );
     };
     measure();
+    if (alignAddButtonToLineAnchor && !alignFirstLineToEnd) return;
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [alignFirstLineToEnd, editing, draft, text, onOverflowBelowChange, lineAnchorCenter, lineAnchorRowHeight]);
+  }, [
+    alignFirstLineToEnd,
+    alignAddButtonToLineAnchor,
+    editing,
+    draft,
+    text,
+    readOnly,
+    showAddButton,
+    onOverflowBelowChange,
+    lineAnchorCenter,
+    lineAnchorRowHeight,
+  ]);
 
   if (editing && !readOnly) {
     return (
-      <div ref={rootRef} style={combinedRootStyle} className={`${topGapClass}mb-0.5 flex ${alignClass} ${placementClassName}`}>
+      <div ref={rootRef} style={rootStyle} className={`${topGapClass}mb-0.5 flex ${alignClass} ${placementClassName}`}>
         <textarea
           data-stage-comment-body="true"
           ref={textareaRef}
@@ -1737,7 +1758,7 @@ function BlockStageComment({
       .map((line) => `${stageDelimOpen}${line}${stageDelimClose}`)
       .join("\n");
     return (
-      <div ref={rootRef} style={combinedRootStyle} className={`${topGapClass}mb-0.5 flex ${alignClass} ${placementClassName}`}>
+      <div ref={rootRef} style={rootStyle} className={`${topGapClass}mb-0.5 flex ${alignClass} ${placementClassName}`}>
         {readOnly ? (
           <span data-stage-comment-body="true" className={stageCommentTextClass}>{label}</span>
         ) : (
@@ -1758,10 +1779,11 @@ function BlockStageComment({
   return (
     <div
       ref={rootRef}
-      style={combinedRootStyle}
+      style={rootStyle}
       className={`${zeroHeightAddButton ? "mb-0 h-0 overflow-visible" : "mb-1"} flex ${addButtonAlignClass} ${placementClassName}`}
     >
       <button
+        ref={addButtonRef}
         type="button"
         onClick={openEditor}
         title="添加演员提示/补充舞台提示"
@@ -2414,9 +2436,13 @@ function TagPicker({
 const COMPACT_STAGE_CONTROL_THRESHOLD_REM = 1.9;
 const COMPACT_STAGE_DELETE_SHIFT_PX = -3;
 const COMPACT_STAGE_CONTENT_GAP_PX = 4;
-const COMPACT_IN_BLOCK_ADD_BUTTON_SIZE_PX = 16;
-const COMPACT_DEFAULT_LINE_HEIGHT_PX = 28;
-const COMPACT_CONTENT_OPTICAL_OFFSET_PX = -1;
+const COMPACT_CONTENT_OPTICAL_OFFSET_PX = -2;
+
+function getCompactFallbackLineHeightPx() {
+  if (typeof window === "undefined") return 28;
+  const rootFontSize = parseFloat(window.getComputedStyle(document.documentElement).fontSize);
+  return (Number.isFinite(rootFontSize) ? rootFontSize : 16) * 1.75;
+}
 
 function ScriptBlock({
   block,
@@ -2575,8 +2601,8 @@ function ScriptBlock({
   const [stageCommentEditing, setStageCommentEditing] = useState(false);
   const [stageCommentOverflowBelow, setStageCommentOverflowBelow] = useState(0);
   const [compactCharacterColumnHeight, setCompactCharacterColumnHeight] = useState(0);
-  const [compactCharacterLineHeight, setCompactCharacterLineHeight] = useState(COMPACT_DEFAULT_LINE_HEIGHT_PX);
-  const [compactContentLineHeight, setCompactContentLineHeight] = useState(COMPACT_DEFAULT_LINE_HEIGHT_PX);
+  const [compactCharacterLineHeight, setCompactCharacterLineHeight] = useState(getCompactFallbackLineHeightPx);
+  const [compactContentLineHeight, setCompactContentLineHeight] = useState(getCompactFallbackLineHeightPx);
   const [unfoldForCompactControls, setUnfoldForCompactControls] = useState(false);
   const [compactControlLayout, setCompactControlLayout] = useState<{
     deleteLeft: number | null;
@@ -2857,10 +2883,6 @@ function ScriptBlock({
   const hasStageComment = !!block.stageComment?.trim();
   const showCompactStageCommentRow = hasStageComment || stageCommentEditing;
   const compactCharacterLastLineCenter = compactCharacterColumnHeight - compactCharacterLineHeight / 2;
-  const compactStageCommentAddTop = Math.max(
-    0,
-    Math.round(compactCharacterLastLineCenter - COMPACT_IN_BLOCK_ADD_BUTTON_SIZE_PX / 2)
-  );
   const compactContentFirstLineTop = Math.max(
     0,
     Math.round(compactCharacterLastLineCenter - compactContentLineHeight / 2 + COMPACT_CONTENT_OPTICAL_OFFSET_PX)
@@ -2888,8 +2910,9 @@ function ScriptBlock({
   useLayoutEffect(() => {
     if (!isCompactTextLayout) {
       setCompactCharacterColumnHeight(0);
-      setCompactCharacterLineHeight(COMPACT_DEFAULT_LINE_HEIGHT_PX);
-      setCompactContentLineHeight(COMPACT_DEFAULT_LINE_HEIGHT_PX);
+      const fallbackLineHeight = getCompactFallbackLineHeightPx();
+      setCompactCharacterLineHeight(fallbackLineHeight);
+      setCompactContentLineHeight(fallbackLineHeight);
       return;
     }
     const el = compactCharacterColumnRef.current;
@@ -3201,9 +3224,9 @@ function ScriptBlock({
               stageDelimClose={stageDelimClose}
               layoutMode={textLayoutMode}
               placementClassName={showCompactStageCommentRow ? "col-start-3 row-start-1 self-start pt-[0.0625rem]" : "col-start-2 row-start-1 self-start justify-self-center"}
-              placementStyle={!showCompactStageCommentRow ? { marginTop: compactStageCommentAddTop } : undefined}
               onEditingChange={setStageCommentEditing}
               addButtonCenter
+              alignAddButtonToLineAnchor={!showCompactStageCommentRow}
               addButtonRevealOnHover
               alignFirstLineToEnd={showCompactStageCommentRow}
               onOverflowBelowChange={setStageCommentOverflowBelow}
