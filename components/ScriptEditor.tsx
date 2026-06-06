@@ -65,6 +65,10 @@ type PendingLargeSelectionConfirmation = {
   onConfirm: () => void;
   onCancel?: () => void;
 };
+type PendingStageDelimiterChange = {
+  open: string;
+  close: string;
+};
 
 function largeSelectionOperationMessage(operation: LargeSelectionOperation, count: number) {
   const actionLabel =
@@ -360,7 +364,7 @@ function sanitizePasteNode(node: Node): string {
     case "br": return "<br>";
     case "span":
       if (el.hasAttribute("data-stage-inline"))
-        return `<span data-stage-inline="" style="font-style:italic;color:#a1a1aa">${inner}</span>`;
+        return `<span data-stage-inline="" style="font-family:var(--font-stage);font-style:italic;color:#a1a1aa">${inner}</span>`;
       return inner;
     case "p": case "div": case "li":
     case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
@@ -405,14 +409,6 @@ function htmlToMd(html: string): string {
 
 const stagePairRegexCache = new Map<string, RegExp>();
 
-function stageDelimiterPairs(delimOpen = "（", delimClose = "）"): [string, string][] {
-  const pairs: [string, string][] = [["(", ")"], ["（", "）"], ["【", "】"]];
-  if (delimOpen && delimClose && !pairs.some(([open, close]) => open === delimOpen && close === delimClose)) {
-    pairs.push([delimOpen, delimClose]);
-  }
-  return pairs;
-}
-
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -421,27 +417,26 @@ function stagePairRegex(delimOpen = "（", delimClose = "）"): RegExp {
   const cacheKey = `${delimOpen}\u0000${delimClose}`;
   const cached = stagePairRegexCache.get(cacheKey);
   if (cached) return cached;
-  const pairs = stageDelimiterPairs(delimOpen, delimClose);
   const regex = new RegExp(
-    pairs
-      .map(([open, close]) => `${escapeRegex(open)}[^${escapeRegex(close)}\n]*${escapeRegex(close)}`)
-      .join("|"),
+    `${escapeRegex(delimOpen)}[^${escapeRegex(delimClose)}\n]*${escapeRegex(delimClose)}`,
     "g"
   );
   stagePairRegexCache.set(cacheKey, regex);
   return regex;
 }
 
-function mdToHtml(md: string, delimOpen = "（", delimClose = "）"): string {
+function mdToHtml(md: string, delimOpen?: string, delimClose?: string): string {
   let s = md
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  const pairRegex = stagePairRegex(delimOpen, delimClose);
-  pairRegex.lastIndex = 0;
-  s = s.replace(pairRegex, (match) =>
-    `<span data-stage-inline="">${match}</span>`
-  );
+  if (delimOpen !== undefined && delimClose !== undefined) {
+    const pairRegex = stagePairRegex(delimOpen, delimClose);
+    pairRegex.lastIndex = 0;
+    s = s.replace(pairRegex, (match) =>
+      `<span data-stage-inline="" style="font-family:var(--font-stage);font-style:italic;color:#a1a1aa">${match}</span>`
+    );
+  }
   // Collapse 3+ consecutive * or _ to exactly 2, so nested markers from old
   // double-bold bugs render as a single level instead of mis-parsing.
   s = s.replace(/\*{3,}/g, "**").replace(/_{3,}/g, "__");
@@ -449,6 +444,14 @@ function mdToHtml(md: string, delimOpen = "（", delimClose = "）"): string {
   s = s.replace(/__([\s\S]+?)__/g, (_, inner) => `<u>${inner}</u>`);
   s = s.replace(/\n/g, "<br>");
   return s;
+}
+
+function replaceInlineStageDelimiters(content: string, fromOpen: string, fromClose: string, toOpen: string, toClose: string): string {
+  const pairRegex = stagePairRegex(fromOpen, fromClose);
+  pairRegex.lastIndex = 0;
+  return content.replace(pairRegex, (match) =>
+    `${toOpen}${match.slice(fromOpen.length, match.length - fromClose.length)}${toClose}`
+  );
 }
 
 // Properly toggle a bold/underline tag on the given range:
@@ -536,6 +539,7 @@ function wrapSelectionAsInlineStageCue(
 
   const span = document.createElement("span");
   span.setAttribute("data-stage-inline", "");
+  span.style.fontFamily = "var(--font-stage)";
   span.style.fontStyle = "italic";
   span.style.color = "#a1a1aa";
   span.appendChild(document.createTextNode(delimOpen));
@@ -562,10 +566,9 @@ function applyInlineStageStyling(div: HTMLDivElement, delimOpen = "（", delimCl
     el.hasAttribute("data-stage-inline");
 
   const validStageText = (text: string) =>
-    stageDelimiterPairs(delimOpen, delimClose).some(([open, close]) =>
-      text.startsWith(open) && text.endsWith(close)
-    ) &&
-    text.length >= 2;
+    text.startsWith(delimOpen) &&
+    text.endsWith(delimClose) &&
+    text.length >= delimOpen.length + delimClose.length;
 
   // Remove spans whose content no longer forms a valid pair
   div.querySelectorAll("span[data-stage-inline]").forEach((span) => {
@@ -609,6 +612,7 @@ function applyInlineStageStyling(div: HTMLDivElement, delimOpen = "（", delimCl
       if (start > last) frag.appendChild(document.createTextNode(text.slice(last, start)));
       const span = document.createElement("span");
       span.setAttribute("data-stage-inline", "");
+      span.style.fontFamily = "var(--font-stage)";
       span.style.fontStyle = "italic";
       span.style.color = "#a1a1aa";
       span.textContent = text.slice(start, end);
@@ -2692,10 +2696,11 @@ function ScriptBlock({
       if (el) {
         const currentBlock = latestBlockRef.current;
         const currentDelims = latestStageDelimRef.current;
-        el.innerHTML = mdToHtml(currentBlock.content);
+        el.innerHTML = currentBlock.type === "stage"
+          ? mdToHtml(currentBlock.content)
+          : mdToHtml(currentBlock.content, currentDelims.open, currentDelims.close);
         localContentRef.current = currentBlock.content;
         localTypeRef.current = currentBlock.type;
-        if (currentBlock.type !== "stage") applyInlineStageStyling(el, currentDelims.open, currentDelims.close);
         localStageDelimRef.current = currentDelims;
       }
       onRegisterRef(block.id, el);
@@ -2808,9 +2813,11 @@ function ScriptBlock({
     if (contentOrTypeChanged) {
       localContentRef.current = block.content;
       localTypeRef.current = block.type;
-      div.innerHTML = mdToHtml(block.content);
+      div.innerHTML = block.type === "stage"
+        ? mdToHtml(block.content)
+        : mdToHtml(block.content, stageDelimOpen, stageDelimClose);
     }
-    if (block.type !== "stage" && (contentOrTypeChanged || stageDelimChanged)) {
+    if (block.type !== "stage" && stageDelimChanged && !contentOrTypeChanged) {
       applyInlineStageStyling(div, stageDelimOpen, stageDelimClose);
     }
     localStageDelimRef.current = { open: stageDelimOpen, close: stageDelimClose };
@@ -3854,6 +3861,8 @@ export default function ScriptEditor({
   const [scriptConfig, setScriptConfig] = useState<ScriptConfig>(DEFAULT_SCRIPT_CONFIG);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [pendingLockedMode, setPendingLockedMode] = useState<boolean | null>(null);
+  const [pendingStageDelimiterChange, setPendingStageDelimiterChange] =
+    useState<PendingStageDelimiterChange | null>(null);
 
   const saveScriptConfig = useCallback(async (patch: Partial<ScriptConfig>) => {
     if (!baseCanEditMetadata) return;
@@ -3865,6 +3874,15 @@ export default function ScriptEditor({
       body: JSON.stringify(next),
     });
   }, [baseCanEditMetadata, scriptConfig, effectiveScriptId]);
+
+  const requestStageDelimiterChange = useCallback((open: string, close: string) => {
+    if (scriptConfig.stageDelimOpen === open && scriptConfig.stageDelimClose === close) {
+      setOpenMenu(null);
+      return;
+    }
+    setPendingStageDelimiterChange({ open, close });
+    setOpenMenu(null);
+  }, [scriptConfig.stageDelimOpen, scriptConfig.stageDelimClose]);
 
   // ── Page map (computed client-side, deterministic) ──────────────────────────
   const pageMap = useMemo(() => computePageMap(blocks, scriptConfig.pageLayout), [blocks, scriptConfig.pageLayout]);
@@ -5204,6 +5222,38 @@ export default function ScriptEditor({
     setCanRedo(false);
   }, []);
 
+  const applyStageDelimiterChange = useCallback(async (updateExisting: boolean) => {
+    const pending = pendingStageDelimiterChange;
+    if (!pending) return;
+    const previousOpen = scriptConfig.stageDelimOpen;
+    const previousClose = scriptConfig.stageDelimClose;
+    setPendingStageDelimiterChange(null);
+    if (updateExisting) {
+      const nextBlocks = blocksRef.current.map((block) => {
+        if (block.type === "stage") return block;
+        const content = replaceInlineStageDelimiters(
+          block.content,
+          previousOpen,
+          previousClose,
+          pending.open,
+          pending.close
+        );
+        return content === block.content ? block : { ...block, content };
+      });
+      if (nextBlocks.some((block, index) => block !== blocksRef.current[index])) {
+        saveSnapshot();
+        setBlocks(nextBlocks);
+      }
+    }
+    await saveScriptConfig({ stageDelimOpen: pending.open, stageDelimClose: pending.close });
+  }, [
+    pendingStageDelimiterChange,
+    saveScriptConfig,
+    saveSnapshot,
+    scriptConfig.stageDelimOpen,
+    scriptConfig.stageDelimClose,
+  ]);
+
   // Apply inline format (bold/underline) to the current window selection.
   // Called from toolbar buttons via onMouseDown+preventDefault, which keeps
   // the selection alive even after the contenteditable loses focus.
@@ -6118,7 +6168,7 @@ export default function ScriptEditor({
                     ).map(([open, close, label]) => (
                       <button
                         key={open}
-                        onClick={() => { saveScriptConfig({ stageDelimOpen: open, stageDelimClose: close }); setOpenMenu(null); }}
+                        onClick={() => requestStageDelimiterChange(open, close)}
                         className={`flex w-full items-center justify-between px-3 py-1.5 text-sm hover:bg-zinc-50 ${scriptConfig.stageDelimOpen === open ? "font-medium text-zinc-800" : "text-zinc-500"}`}
                       >
                         <span>{label}</span>
@@ -7368,6 +7418,55 @@ export default function ScriptEditor({
                 className="rounded bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
               >
                 确认
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingStageDelimiterChange && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setPendingStageDelimiterChange(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="w-[420px] rounded-2xl bg-white p-5 shadow-xl"
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 className="text-base font-semibold text-zinc-800">确认切换段内舞台提示括号？</h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-500">
+              切换括号后，剧本中原本由 “
+              {pendingStageDelimiterChange.open}
+              ” 和 “
+              {pendingStageDelimiterChange.close}
+              ” 包含的内容也将会被视为块内舞台提示。
+              <br />
+              如确定需要切换，请选择是否自动更新现有剧本，将所有的块内舞台提示括号更新为 “
+              {pendingStageDelimiterChange.open}
+              ” 和 “
+              {pendingStageDelimiterChange.close}
+              ”。
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setPendingStageDelimiterChange(null)}
+                className="rounded border border-zinc-200 px-3 py-1.5 text-sm text-zinc-500 hover:border-zinc-300 hover:text-zinc-700"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => applyStageDelimiterChange(false)}
+                className="rounded border border-zinc-200 px-3 py-1.5 text-sm text-zinc-600 hover:border-zinc-300 hover:text-zinc-800"
+              >
+                仅切换括号
+              </button>
+              <button
+                onClick={() => applyStageDelimiterChange(true)}
+                className="rounded bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+              >
+                确认更新
               </button>
             </div>
           </div>
