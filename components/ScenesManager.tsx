@@ -138,9 +138,23 @@ function SceneEditRow({
     try { await onDelete(); } finally { setDeleting(false); }
   };
 
+  const toggleExpanded = () => setExpanded((v) => !v);
+
+  const handleRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button,input,textarea,select,a,[contenteditable='true'],[data-scene-editable='true']")) {
+      return;
+    }
+    toggleExpanded();
+  };
+
   return (
     <>
-      <tr ref={rowRef} className={`group border-b ${expanded ? "border-zinc-200" : "border-zinc-100 last:border-0"}${indent ? " bg-zinc-50/40" : ""}`}>
+      <tr
+        ref={rowRef}
+        onClick={handleRowClick}
+        className={`group cursor-pointer border-b ${expanded ? "border-zinc-200" : "border-zinc-100 last:border-0"}${indent ? " bg-zinc-50/40" : ""}`}
+      >
         <td className={`py-3 w-24${indent ? " pl-8 pr-4" : " px-4"}`}>
           {editingNumber ? (
             <input
@@ -155,6 +169,7 @@ function SceneEditRow({
           ) : (
             <span
               onClick={() => canEdit && setEditingNumber(true)}
+              data-scene-editable={canEdit ? "true" : undefined}
               className={`text-sm ${indent ? "text-zinc-400" : "font-semibold text-zinc-600"} ${canEdit ? "cursor-text hover:opacity-70" : ""}`}
             >
               {scene.number || "—"}
@@ -175,6 +190,7 @@ function SceneEditRow({
           ) : (
             <span
               onClick={() => canEdit && setEditingName(true)}
+              data-scene-editable={canEdit ? "true" : undefined}
               className={`text-sm ${indent ? "text-zinc-500" : "font-medium text-zinc-700"} ${canEdit ? "cursor-text hover:opacity-70" : ""}`}
             >
               {scene.name || <span className="italic text-zinc-300">未命名</span>}
@@ -212,7 +228,7 @@ function SceneEditRow({
               )
             )}
             <button
-              onClick={() => setExpanded((v) => !v)}
+              onClick={toggleExpanded}
               className={`text-xs transition-all ${expanded ? "text-zinc-500" : "text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-zinc-600"}`}
               title={expanded ? "收起" : "展开详情"}
             >
