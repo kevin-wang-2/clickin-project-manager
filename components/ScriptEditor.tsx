@@ -15,11 +15,12 @@ import { flushSync } from "react-dom";
 import Link from "next/link";
 import { BASE_PATH } from "@/lib/base-path";
 import type { Block, BlockType, Character, Scene, ScriptState, ScriptConfig, ScriptTextLayoutMode } from "@/lib/script-types";
-import type { TagGroup, BlockTagValue, Version, VersionStatus } from "@/lib/db";
+import type { TagGroup, BlockTagValue, Version, VersionStatus, SceneDetail } from "@/lib/db";
 import TagGroupEditor from "@/components/TagGroupEditor";
 import VersionSelector from "@/components/VersionSelector";
 import BlockMountAssets from "@/components/assets/BlockMountAssets";
 import MountPointAssets from "@/components/assets/MountPointAssets";
+import DurationInput from "@/components/DurationInput";
 import { DEFAULT_SCRIPT_CONFIG } from "@/lib/script-types";
 import { diffState, type TagEntry } from "@/lib/script-ops";
 import { computePageMap, DEFAULT_PAGE_CONFIG } from "@/lib/script-page";
@@ -27,6 +28,7 @@ import type { PageConfig } from "@/lib/script-page";
 import SmartTextarea from "@/components/SmartTextarea";
 import SmartText from "@/components/SmartText";
 import CommentAssetPicker, { type PendingAsset } from "@/components/assets/CommentAssetPicker";
+import { formatDuration, parseDuration } from "@/lib/duration";
 
 let _seq = 0;
 const uid = () => `${Date.now().toString(36)}${(++_seq).toString(36)}`;
@@ -38,13 +40,16 @@ const LINE_INDEX_GUTTER_OFFSET_REM = 1.25;
 const LINE_INDEX_CONTROL_MIN_WIDTH_REM = 0.5;
 const SCRIPT_TOC_CENTER_EVENT = "script-toc-center-active";
 const SCRIPT_EDITOR_MAX_WIDTH_PX = 768; // Tailwind max-w-3xl
-const SCRIPT_TOC_RAIL_MAX_WIDTH_REM = 14;
+const SCRIPT_CONTENTS_MENU_MAX_WIDTH_REM = 14;
 const SCRIPT_TOC_RAIL_COMPACT_WIDTH_REM = 4;
 const SCRIPT_TOC_RAIL_SCROLLBAR_WIDTH_REM = 2.5;
 const SCRIPT_TOC_RAIL_NUMBER_SLOT_REM = 0.5; // Minimum number slot width; widened when longer scene numbers need it.
 const SCRIPT_TOC_RAIL_LABEL_GAP_REM = 1.5;
 const SCRIPT_TOC_RAIL_SUBSCENE_INDENT_REM = 2; // Right-edge gap between chapter numbers and scene numbers.
 const SCRIPT_TOC_RAIL_GAP_REM = -1;
+const SCRIPT_SCENE_DETAIL_RAIL_MIN_WIDTH_REM = 18;
+const SCRIPT_SCENE_DETAIL_MODE_BUTTON_EXTRA_INSET_REM = 0.25;
+const SCRIPT_SCENE_DETAIL_CAPTION_BG_HEIGHT_REM = 2.5;
 const SCRIPT_TOC_ACTIVE_SCENE_BUFFER_PX = 150;
 let scriptTocMeasureElement: HTMLSpanElement | null = null;
 let scriptTocMeasureCache: {
@@ -91,7 +96,7 @@ function measureScriptTocRailLayout(scenes: Scene[], rootFontSizePx: number): {
   chapterNumberSlotWidthPx: number;
   sceneNumberSlotWidthPx: number;
 } {
-  const maxWidthPx = SCRIPT_TOC_RAIL_MAX_WIDTH_REM * rootFontSizePx;
+  const maxWidthPx = SCRIPT_CONTENTS_MENU_MAX_WIDTH_REM * rootFontSizePx;
   const minimumNumberSlotWidthPx = SCRIPT_TOC_RAIL_NUMBER_SLOT_REM * rootFontSizePx;
   const gapPx = SCRIPT_TOC_RAIL_LABEL_GAP_REM * rootFontSizePx;
   const subSceneIndentPx = SCRIPT_TOC_RAIL_SUBSCENE_INDENT_REM * rootFontSizePx;
@@ -210,6 +215,7 @@ type PendingAggregateFocusPrompt = {
   aggregateIds: string[];
   selectedIds: Set<string>;
 };
+type SceneMetaFields = Pick<SceneDetail, "synopsis" | "actionLine" | "music" | "stageNotes" | "expectedDuration">;
 
 function largeSelectionOperationMessage(operation: LargeSelectionOperation, count: number) {
   const actionLabel =
@@ -836,6 +842,22 @@ function buildOrderedTocScenes(scenes: Scene[], blocks: Block[]): Scene[] {
   return orderedScenes;
 }
 
+function toSceneDetail(scene: Scene): SceneDetail {
+  return {
+    ...scene,
+    synopsis: "",
+    actionLine: "",
+    music: "",
+    stageNotes: "",
+    expectedDuration: "",
+  };
+}
+
+function syncSceneDetailsWithScenes(details: SceneDetail[], scenes: Scene[]): SceneDetail[] {
+  const detailById = new Map(details.map((detail) => [detail.id, detail]));
+  return scenes.map((scene) => ({ ...(detailById.get(scene.id) ?? toSceneDetail(scene)), ...scene }));
+}
+
 function TableOfContents({
   scenes,
   blocks,
@@ -962,6 +984,253 @@ function TableOfContents({
           );
         })}
       </nav>
+    </div>
+  );
+}
+
+function ScriptSceneMetaField({
+  label,
+  value,
+  multiline,
+  canEdit,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  multiline?: boolean;
+  canEdit: boolean;
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = async () => {
+    if (draft === value) return;
+    setSaving(true);
+    try {
+      await onSave(draft);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="group space-y-1.5">
+      <label className="text-[10px] font-semibold tracking-widest text-zinc-500 uppercase transition-colors group-hover:text-zinc-600">{label}</label>
+      {canEdit ? (
+        multiline ? (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            disabled={saving}
+            rows={3}
+            className="w-full resize-none rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-xs leading-relaxed text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 hover:border-zinc-300 hover:text-zinc-950 focus:border-zinc-400 disabled:opacity-50"
+            placeholder="—"
+          />
+        ) : (
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            disabled={saving}
+            className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-xs text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 hover:border-zinc-300 hover:text-zinc-950 focus:border-zinc-400 disabled:opacity-50"
+            placeholder="—"
+          />
+        )
+      ) : (
+        <p className="min-h-[1.75rem] whitespace-pre-wrap rounded-lg border border-zinc-200 bg-transparent px-2.5 py-2 text-xs leading-relaxed text-zinc-700 transition-colors group-hover:border-zinc-300 group-hover:text-zinc-950">
+          {value || <span className="italic text-zinc-400">—</span>}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ScriptSceneDetailRail({
+  scene,
+  productionId,
+  versionId,
+  canEdit,
+  scrollbarOffsetPx,
+  onUpdateIdentity,
+  onPatchMeta,
+}: {
+  scene: SceneDetail | null;
+  productionId: string;
+  versionId: string | null;
+  canEdit: boolean;
+  scrollbarOffsetPx: number;
+  onUpdateIdentity: (id: string, number: string, name: string) => void;
+  onPatchMeta: (id: string, fields: Partial<SceneMetaFields>) => Promise<void>;
+}) {
+  const [numberDraft, setNumberDraft] = useState(scene?.number ?? "");
+  const [nameDraft, setNameDraft] = useState(scene?.name ?? "");
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const sectionCanEdit = canEdit && editMode;
+  const expectedDurationSeconds = useMemo(
+    () => scene ? parseDuration(scene.expectedDuration) : null,
+    [scene?.expectedDuration]
+  );
+  const durationText = scene ? formatDuration(expectedDurationSeconds) || "—" : "—";
+
+  useEffect(() => {
+    setNumberDraft(scene?.number ?? "");
+    setNameDraft(scene?.name ?? "");
+  }, [scene?.id, scene?.number, scene?.name]);
+  useEffect(() => {
+    setEditMode(false);
+  }, [scene?.id]);
+  useEffect(() => {
+    if (!editMode) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const rail = railRef.current;
+      if (!rail || rail.contains(event.target as Node)) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && rail.contains(active)) active.blur();
+      window.setTimeout(() => setEditMode(false), 0);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [editMode]);
+
+  const commitIdentity = async () => {
+    if (!scene) return;
+    const number = numberDraft.trim();
+    const name = nameDraft.trim();
+    if (number === scene.number && name === scene.name) return;
+    setSavingIdentity(true);
+    try {
+      onUpdateIdentity(scene.id, number, name);
+    } finally {
+      setSavingIdentity(false);
+    }
+  };
+  const renderDurationField = () => {
+    if (!scene) return null;
+    return (
+      <div className="group space-y-1.5">
+        <label className="text-[10px] font-semibold tracking-widest text-zinc-500 uppercase transition-colors group-hover:text-zinc-600">预期时长</label>
+        <DurationInput
+          value={expectedDurationSeconds}
+          canEdit={sectionCanEdit}
+          onSave={(seconds) => onPatchMeta(scene.id, { expectedDuration: seconds != null ? String(seconds) : "" })}
+          className="!min-h-[1.75rem] !rounded-lg !border !border-zinc-200 !bg-transparent !px-2.5 !py-2 !text-xs !text-zinc-700 hover:!border-zinc-300 hover:!bg-transparent hover:!text-zinc-950"
+        />
+      </div>
+    );
+  };
+
+  return (
+    <div
+      ref={railRef}
+      className="group/scene-detail box-border flex h-full min-h-0 w-full flex-col rounded-lg px-3 pt-3 text-left"
+      style={{
+        background: `linear-gradient(to bottom, rgb(255, 255, 255) 0, rgb(255, 255, 255) ${SCRIPT_SCENE_DETAIL_CAPTION_BG_HEIGHT_REM}rem, rgba(255, 255, 255, ${sectionCanEdit ? "1" : "0.5"}) ${SCRIPT_SCENE_DETAIL_CAPTION_BG_HEIGHT_REM}rem, rgba(255, 255, 255, ${sectionCanEdit ? "1" : "0.5"}) 100%)`,
+      }}
+    >
+      <div
+        className="mb-3 flex shrink-0 items-center justify-between gap-2"
+        style={{
+          marginRight: `calc(-0.75rem - ${scrollbarOffsetPx}px)`,
+          paddingRight: `calc(${scrollbarOffsetPx}px + 8px + ${SCRIPT_SCENE_DETAIL_MODE_BUTTON_EXTRA_INSET_REM}rem)`,
+        }}
+      >
+        <div className="flex min-w-0 items-baseline gap-2">
+          {sectionCanEdit ? (
+            <p className="shrink-0 text-xs font-bold tracking-widest text-zinc-500 uppercase">章节详情</p>
+          ) : scene ? (
+            <p className="min-w-0 truncate text-xs text-zinc-600">
+              <span className="font-bold">预期时长：</span>
+              <span className="font-normal">{durationText}</span>
+            </p>
+          ) : (
+            <p className="shrink-0 text-xs font-bold tracking-widest text-zinc-500 uppercase">章节详情</p>
+          )}
+        </div>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setEditMode((value) => !value)}
+            className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition ${
+              editMode
+                ? "bg-zinc-700 text-white opacity-100 hover:bg-zinc-600"
+                : "pointer-events-none bg-[#637ca1] text-white opacity-0 hover:bg-[#91a8ca] group-hover/scene-detail:pointer-events-auto group-hover/scene-detail:opacity-100"
+            }`}
+          >
+            {editMode ? "确认" : "编辑"}
+          </button>
+        ) : (
+          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600">只读</span>
+        )}
+      </div>
+      {!scene ? (
+        <div className="flex flex-1 items-center justify-center text-center text-xs leading-relaxed text-zinc-500">
+          滚动或选择目录中的章节
+        </div>
+      ) : (
+        <div
+          className="script-toc-rail-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain"
+          style={{
+            marginRight: `calc(-0.75rem - ${scrollbarOffsetPx}px)`,
+            paddingRight: `${scrollbarOffsetPx}px`,
+            scrollbarGutter: "stable",
+          }}
+        >
+          {sectionCanEdit && (
+            <>
+              <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
+                <div className="group space-y-1.5">
+                  <label className="text-[10px] font-semibold tracking-widest text-zinc-500 uppercase transition-colors group-hover:text-zinc-600">编号</label>
+                  <input
+                    value={numberDraft}
+                    onChange={(e) => setNumberDraft(e.target.value)}
+                    onBlur={commitIdentity}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    disabled={savingIdentity}
+                    className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-xs font-semibold text-zinc-800 outline-none transition-colors hover:border-zinc-300 hover:text-zinc-950 focus:border-zinc-400 disabled:opacity-50"
+                  />
+                </div>
+                <div className="group space-y-1.5">
+                  <label className="text-[10px] font-semibold tracking-widest text-zinc-500 uppercase transition-colors group-hover:text-zinc-600">名称</label>
+                  <input
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onBlur={commitIdentity}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    disabled={savingIdentity}
+                    className="w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-xs text-zinc-800 outline-none transition-colors placeholder:text-zinc-400 hover:border-zinc-300 hover:text-zinc-950 focus:border-zinc-400 disabled:opacity-50"
+                    placeholder="未命名"
+                  />
+                </div>
+              </div>
+              {renderDurationField()}
+            </>
+          )}
+          <ScriptSceneMetaField label="简介" value={scene.synopsis} multiline canEdit={sectionCanEdit} onSave={(value) => onPatchMeta(scene.id, { synopsis: value })} />
+          <ScriptSceneMetaField label="行动线" value={scene.actionLine} multiline canEdit={sectionCanEdit} onSave={(value) => onPatchMeta(scene.id, { actionLine: value })} />
+          <ScriptSceneMetaField label="音乐" value={scene.music} multiline canEdit={sectionCanEdit} onSave={(value) => onPatchMeta(scene.id, { music: value })} />
+          <ScriptSceneMetaField label="舞台呈现" value={scene.stageNotes} multiline canEdit={sectionCanEdit} onSave={(value) => onPatchMeta(scene.id, { stageNotes: value })} />
+          <div className="pt-3">
+            <MountPointAssets
+              productionId={productionId}
+              mountType="scene"
+              mountId={scene.id}
+              label={`${scene.number}${scene.name ? ` ${scene.name}` : ""}`}
+              canEdit={sectionCanEdit}
+              versionId={versionId}
+              display="compact"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4816,6 +5085,7 @@ export default function ScriptEditor({
   const [focusedCharacterIds, setFocusedCharacterIds] = useState<Set<string>>(() => readStoredCharacterFocus(effectiveScriptId));
   const [pendingAggregateFocusPrompt, setPendingAggregateFocusPrompt] = useState<PendingAggregateFocusPrompt | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
+  const [sceneDetails, setSceneDetails] = useState<SceneDetail[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([makeBlock()]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const focusedIdRef = useRef<string | null>(null);
@@ -4881,6 +5151,7 @@ export default function ScriptEditor({
   // ── Page map (computed client-side, deterministic) ──────────────────────────
   const pageMap = useMemo(() => computePageMap(blocks, scriptConfig.pageLayout), [blocks, scriptConfig.pageLayout]);
   const sceneById = useMemo(() => new Map(scenes.map((scene) => [scene.id, scene])), [scenes]);
+  const sceneDetailById = useMemo(() => new Map(sceneDetails.map((scene) => [scene.id, scene])), [sceneDetails]);
   const maxLineIndexText = String(Math.max(1, blocks.length));
   useEffect(() => {
     setFocusedCharacterIds(readStoredCharacterFocus(effectiveScriptId));
@@ -5150,12 +5421,14 @@ export default function ScriptEditor({
   const movedHighlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigatingAwayRef = useRef(false);
   const blocksRef = useRef(blocks);
+  const scenesRef = useRef(scenes);
   const blockIndexByIdRef = useRef<Map<string, number>>(new Map(blocks.map((block, index) => [block.id, index])));
   const prevBlocksLengthRef = useRef(blocks.length);
   useLayoutEffect(() => {
     blocksRef.current = blocks;
     blockIndexByIdRef.current = new Map(blocks.map((block, index) => [block.id, index]));
   }, [blocks]);
+  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   useEffect(() => { blockTagMapRef.current = blockTagMap; }, [blockTagMap]);
   useEffect(() => () => {
     if (reorderUnlockFrame.current !== null) cancelAnimationFrame(reorderUnlockFrame.current);
@@ -5956,6 +6229,7 @@ export default function ScriptEditor({
     setSpacerH({ top: 0, bot: 0 });
     setCharacters([]);
     setScenes([]);
+    setSceneDetails([]);
     syncedStateRef.current = null;
 
     const vParam = activeVersionId ? `?v=${encodeURIComponent(activeVersionId)}` : "";
@@ -5992,6 +6266,7 @@ export default function ScriptEditor({
           setBlocks(state.blocks);
           setCharacters(state.characters);
           setScenes(state.scenes);
+          setSceneDetails((prev) => syncSceneDetailsWithScenes(prev, state.scenes));
           syncedStateRef.current = state;
         }
         if (state.config) setScriptConfig({ ...DEFAULT_SCRIPT_CONFIG, ...state.config });
@@ -6033,6 +6308,19 @@ export default function ScriptEditor({
       })
       .catch(() => { setLoadError("网络错误，请稍后重试"); setLoadState("error"); });
   }, [effectiveScriptId, productionId, activeVersionId, applyWindowRange]);
+
+  useEffect(() => {
+    if (!productionId || !activeVersionId || loadState !== "ready") return;
+    let cancelled = false;
+    fetch(`${BASE_PATH}/api/production/${productionId}/scenes?versionId=${encodeURIComponent(activeVersionId)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (cancelled || !Array.isArray(data)) return;
+        setSceneDetails(syncSceneDetailsWithScenes(data as SceneDetail[], scenesRef.current));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [productionId, activeVersionId, loadState]);
 
   // ── Presence — must be declared before the SSE effect that closes over setPresenceMap ──
 
@@ -6156,6 +6444,7 @@ export default function ScriptEditor({
           setBlocks(prev => mergeServerBlocks(prev, serverState.blocks, oldSynced));
           setCharacters(serverState.characters);
           setScenes(serverState.scenes);
+          setSceneDetails((prev) => syncSceneDetailsWithScenes(prev, serverState.scenes));
           syncedStateRef.current = serverState;
         } catch { /* ignore */ }
       }, 300);
@@ -6419,10 +6708,8 @@ export default function ScriptEditor({
 
   // Debounced sync: fires 1500 ms after the last state change.
   const charactersRef = useRef(characters);
-  const scenesRef = useRef(scenes);
   const scriptConfigRef = useRef(scriptConfig);
   useEffect(() => { charactersRef.current = characters; }, [characters]);
-  useEffect(() => { scenesRef.current = scenes; }, [scenes]);
   useEffect(() => { scriptConfigRef.current = scriptConfig; }, [scriptConfig]);
 
   useEffect(() => {
@@ -7315,17 +7602,31 @@ export default function ScriptEditor({
     } else {
       setScenes((prev) => [...prev, newScene]);
     }
+    setSceneDetails((prev) => [...prev, toSceneDetail(newScene)]);
   };
 
   const updateScene = (id: string, number: string, name: string) => {
     if (isLockedMode) return;
     setScenes((prev) => prev.map((s) => (s.id === id ? { ...s, number, name } : s)));
+    setSceneDetails((prev) => prev.map((s) => (s.id === id ? { ...s, number, name } : s)));
   };
 
   const removeScene = (id: string) => {
     if (isLockedMode) return;
     setScenes((prev) => prev.filter((s) => s.id !== id));
+    setSceneDetails((prev) => prev.filter((s) => s.id !== id));
     setBlocks((prev) => prev.map((b) => (b.sceneId === id ? { ...b, sceneId: null } : b)));
+  };
+
+  const patchSceneMeta = async (id: string, fields: Partial<SceneMetaFields>) => {
+    if (!productionId || !canEditMetadata) return;
+    const response = await fetch(`${BASE_PATH}/api/production/${productionId}/scenes/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(activeVersionId ? { ...fields, versionId: activeVersionId } : fields),
+    });
+    if (!response.ok) throw new Error("Failed to update scene metadata");
+    setSceneDetails((prev) => prev.map((scene) => (scene.id === id ? { ...scene, ...fields } : scene)));
   };
 
   const [printPreview, setPrintPreview] = useState(false);
@@ -7413,6 +7714,10 @@ export default function ScriptEditor({
   const scriptTocRailFullWidthPx = scriptTocRailLayout.railWidthPx;
   const scriptTocRailCompactWidthPx =
     (SCRIPT_TOC_RAIL_COMPACT_WIDTH_REM + SCRIPT_TOC_RAIL_SCROLLBAR_WIDTH_REM) * rootFontSizePx;
+  const scriptLeftPanelLeftPx = rootFontSizePx;
+  const scriptContentsMenuRightPx = scriptSideGutterWidth - scriptTocRailGapPx;
+  const scriptSceneDetailWidthPx = Math.max(0, scriptSideGutterWidth - scriptLeftPanelLeftPx);
+  const scriptSceneDetailRailMinWidthPx = SCRIPT_SCENE_DETAIL_RAIL_MIN_WIDTH_REM * rootFontSizePx;
   const scriptTocRailMode: "full" | "compact" | null =
     effectiveViewportWidth <= 0
       ? null
@@ -7421,9 +7726,30 @@ export default function ScriptEditor({
         : scriptSideGutterWidth >= scriptTocRailCompactWidthPx
           ? "compact"
           : null;
-  const scriptTocRailWidthPx = scriptTocRailMode === "compact"
+  const scriptContentsMenuWidthPx = scriptTocRailMode === "compact"
     ? scriptTocRailCompactWidthPx
     : scriptTocRailFullWidthPx;
+  const showSceneDetailRail =
+    scriptTocRailMode === "full" &&
+    !!productionId &&
+    scriptSceneDetailWidthPx >= scriptSceneDetailRailMinWidthPx;
+  const scriptRailContainerWidthPx = showSceneDetailRail
+    ? scriptSceneDetailWidthPx
+    : scriptContentsMenuWidthPx;
+  const scriptRailContainerLeftPx = showSceneDetailRail
+    ? scriptLeftPanelLeftPx
+    : Math.max(scriptLeftPanelLeftPx, scriptContentsMenuRightPx - scriptContentsMenuWidthPx);
+  const scriptContentsMenuLeftPx = Math.max(scriptLeftPanelLeftPx, scriptContentsMenuRightPx - scriptContentsMenuWidthPx);
+  const scriptContentsMenuOffsetPx = showSceneDetailRail
+    ? scriptContentsMenuLeftPx - scriptRailContainerLeftPx
+    : 0;
+  const scriptSceneDetailScrollbarOffsetPx = showSceneDetailRail
+    ? Math.max(0, scriptContentsMenuRightPx - 0.875 * rootFontSizePx - scriptSideGutterWidth)
+    : 0;
+  const activeScene = activeSceneId ? sceneById.get(activeSceneId) ?? null : null;
+  const activeSceneDetail = activeScene
+    ? sceneDetailById.get(activeScene.id) ?? toSceneDetail(activeScene)
+    : null;
   const rightGutterCanShowComments = scriptSideGutterWidth >= COMMENT_BUBBLE_MIN_GUTTER_PX;
   const commentBubbleMaxWidth = Math.max(COMMENT_BUBBLE_MIN_WIDTH_PX, scriptSideGutterWidth - 24);
   const activeCommentBlockIndex = activeCommentBlockId
@@ -8216,21 +8542,46 @@ export default function ScriptEditor({
       {/* Document */}
       {scriptTocRailMode && (
         <aside
-          className="fixed top-20 z-20 h-[calc((100vh-5rem)/3)] min-h-44 max-h-96"
+          className={`fixed top-20 z-20 ${showSceneDetailRail ? "bottom-6 flex min-h-0 flex-col" : "h-[calc((100vh-5rem)/3)] min-h-44 max-h-96"}`}
           style={{
-            left: `${Math.max(rootFontSizePx, scriptSideGutterWidth - scriptTocRailGapPx - scriptTocRailWidthPx)}px`,
-            width: `${scriptTocRailWidthPx}px`,
+            left: `${scriptRailContainerLeftPx}px`,
+            width: `${scriptRailContainerWidthPx}px`,
           }}
         >
-          <TableOfContents
-            scenes={scenes}
-            blocks={blocks}
-            onScrollToScene={scrollToScene}
-            activeSceneId={activeSceneId}
-            placement={scriptTocRailMode === "compact" ? "rail-compact" : "rail"}
-            chapterNumberSlotWidthPx={scriptTocRailLayout.chapterNumberSlotWidthPx}
-            sceneNumberSlotWidthPx={scriptTocRailLayout.sceneNumberSlotWidthPx}
-          />
+          <div className={showSceneDetailRail ? "h-[calc((100vh-5rem)/3)] min-h-44 max-h-96 shrink-0" : "h-full"}>
+            <div
+              className="h-full"
+              style={showSceneDetailRail
+                ? { width: `${scriptContentsMenuWidthPx}px`, marginLeft: `${scriptContentsMenuOffsetPx}px` }
+                : undefined}
+            >
+              <TableOfContents
+                scenes={scenes}
+                blocks={blocks}
+                onScrollToScene={scrollToScene}
+                activeSceneId={activeSceneId}
+                placement={scriptTocRailMode === "compact" ? "rail-compact" : "rail"}
+                chapterNumberSlotWidthPx={scriptTocRailLayout.chapterNumberSlotWidthPx}
+                sceneNumberSlotWidthPx={scriptTocRailLayout.sceneNumberSlotWidthPx}
+              />
+            </div>
+          </div>
+          {showSceneDetailRail && (
+            <div className="my-3 h-px w-full shrink-0 bg-zinc-300" />
+          )}
+          {showSceneDetailRail && productionId && (
+            <div className="min-h-0 flex-[2_1_67%]">
+              <ScriptSceneDetailRail
+                scene={activeSceneDetail}
+                productionId={productionId}
+                versionId={activeVersionId ?? null}
+                canEdit={canEditMetadata}
+                scrollbarOffsetPx={scriptSceneDetailScrollbarOffsetPx}
+                onUpdateIdentity={updateScene}
+                onPatchMeta={patchSceneMeta}
+              />
+            </div>
+          )}
         </aside>
       )}
       <main className="mx-auto px-4 py-8" style={{ maxWidth: SCRIPT_EDITOR_MAX_WIDTH_PX }}>
