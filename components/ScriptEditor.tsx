@@ -1374,6 +1374,7 @@ function BlockCharacterSelector({
   onArrowDown,
   readOnly = false,
   layoutMode = "center",
+  bottomGapClassName = "mb-2",
 }: {
   block: Block;
   characters: Character[];
@@ -1386,6 +1387,7 @@ function BlockCharacterSelector({
   onArrowDown: () => void;
   readOnly?: boolean;
   layoutMode?: ScriptTextLayoutMode;
+  bottomGapClassName?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const setEditingWithNotify = useCallback((v: boolean) => { setEditing(v); onEditingChange(v); }, [onEditingChange]);
@@ -1491,7 +1493,7 @@ function BlockCharacterSelector({
 
   if (!editing) {
     return (
-      <div className={`${compactLayout ? "mb-0 flex justify-end text-right" : "mb-2 flex translate-x-px justify-center"}`}>
+      <div className={`${compactLayout ? "mb-0 flex justify-end text-right" : `${bottomGapClassName} flex translate-x-px justify-center`}`}>
         {readOnly ? (
           <span data-character-label="true" className={`max-w-full break-words text-sm font-bold leading-7 tracking-[0.12em] ${selected.length ? "text-zinc-800" : "text-zinc-300"}`}>
             {selected.length ? selected.map(charLabel).join("、") : "无角色"}
@@ -1673,6 +1675,7 @@ function BlockStageComment({
   lineAnchorCenter,
   lineAnchorRowHeight,
   zeroHeightAddButton = false,
+  manualOffsetYPx = 0,
   getEditorWidth,
 }: {
   value?: string | null;
@@ -1693,6 +1696,7 @@ function BlockStageComment({
   lineAnchorCenter?: number;
   lineAnchorRowHeight?: number;
   zeroHeightAddButton?: boolean;
+  manualOffsetYPx?: number;
   getEditorWidth?: () => number | null;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1723,9 +1727,11 @@ function BlockStageComment({
   const compactLayout = layoutMode === "compact";
   const alignClass = compactLayout ? "justify-start text-left" : "justify-center text-center";
   const addButtonAlignClass = addButtonCenter ? "justify-center" : alignClass;
-  const stageCommentTextClass = `font-stage text-sm italic text-zinc-400 ${compactLayout ? "text-left leading-tight" : ""} whitespace-pre-wrap`;
-  const rootStyle: React.CSSProperties | undefined = (alignFirstLineToEnd || alignAddButtonToLineAnchor) && lineAnchorShift !== 0
-    ? { transform: `translateY(${lineAnchorShift}px)` }
+  const stageCommentLeadingClass = "leading-normal";
+  const stageCommentTextClass = `font-stage text-sm italic text-zinc-400 ${compactLayout ? "text-left" : ""} ${stageCommentLeadingClass} whitespace-pre-wrap`;
+  const rootTranslateY = ((alignFirstLineToEnd || alignAddButtonToLineAnchor) ? lineAnchorShift : 0) + manualOffsetYPx;
+  const rootStyle: React.CSSProperties | undefined = rootTranslateY !== 0
+    ? { transform: `translateY(${rootTranslateY}px)` }
     : undefined;
   const addButtonStyle: React.CSSProperties | undefined = zeroHeightAddButton
     ? { transform: "translateY(-0.75rem)" }
@@ -1821,7 +1827,7 @@ function BlockStageComment({
           placeholder="在此输入演员提示/补充舞台提示"
           rows={1}
           style={editorWidth ? { width: editorWidth } : undefined}
-          className={`${editorWidth ? "shrink-0" : "w-full max-w-xs"} ${compactLayout ? "min-h-[1.125rem] leading-tight" : "min-h-7 leading-7"} resize-none overflow-hidden border-b border-zinc-200 bg-transparent px-1 ${compactLayout ? "text-left" : "text-center"} font-stage text-sm italic text-zinc-500 outline-none placeholder:text-zinc-300 focus:border-zinc-400`}
+          className={`${editorWidth ? "shrink-0" : "w-full max-w-xs"} ${compactLayout ? "min-h-[1.125rem]" : "min-h-7"} ${stageCommentLeadingClass} resize-none overflow-hidden border-b border-zinc-200 bg-transparent px-1 ${compactLayout ? "text-left" : "text-center"} font-stage text-sm italic text-zinc-500 outline-none placeholder:text-zinc-300 focus:border-zinc-400`}
         />
       </div>
     );
@@ -2839,6 +2845,8 @@ function TagPicker({
 const COMPACT_STAGE_CONTROL_THRESHOLD_REM = 1.9;
 const COMPACT_STAGE_DELETE_SHIFT_PX = -3;
 const COMPACT_CONTENT_OPTICAL_OFFSET_PX = -2;
+const IN_BLOCK_STAGE_COMMENT_MANUAL_OFFSET_PX = -2;
+const REHEARSAL_NON_COMPACT_CHARACTER_BOTTOM_GAP_CLASS = "mb-[0.18rem]";
 
 function getCompactFallbackLineHeightPx() {
   if (typeof window === "undefined") return 28;
@@ -3277,6 +3285,14 @@ function ScriptBlock({
   const hasReadOnlySceneLabel = !canEditMetadata && !!readOnlyScene;
   const hasStageComment = !!block.stageComment?.trim();
   const showCompactStageCommentRow = hasStageComment || stageCommentEditing;
+  const stageCommentManualOffsetYPx =
+    isCompactTextLayout && (canEditText || readOnlyRehearsalMode) && (hasStageComment || stageCommentEditing)
+      ? IN_BLOCK_STAGE_COMMENT_MANUAL_OFFSET_PX
+      : 0;
+  const characterBottomGapClassName =
+    readOnlyRehearsalMode && !isCompactTextLayout && block.characterIds.length > 0
+      ? REHEARSAL_NON_COMPACT_CHARACTER_BOTTOM_GAP_CLASS
+      : undefined;
   const compactCharacterLastLineCenter = compactCharacterColumnHeight - compactCharacterLineHeight / 2;
   const compactContentFirstLineTop = Math.max(
     0,
@@ -3657,6 +3673,7 @@ function ScriptBlock({
               onOverflowBelowChange={setStageCommentOverflowBelow}
               lineAnchorCenter={compactCharacterColumnHeight > 0 ? compactCharacterLastLineCenter : undefined}
               lineAnchorRowHeight={compactCharacterColumnHeight || undefined}
+              manualOffsetYPx={stageCommentManualOffsetYPx}
               getEditorWidth={measureStageCommentEditorWidth}
             />
           )}
@@ -3732,6 +3749,7 @@ function ScriptBlock({
               onArrowUp={onArrowUpFromChar}
               onArrowDown={onArrowDownFromChar}
               readOnly={!canEditText || isEditingLocked}
+              bottomGapClassName={characterBottomGapClassName}
             />
           )}
 
@@ -3740,7 +3758,7 @@ function ScriptBlock({
               value={block.stageComment}
               onChange={(stageComment) => onUpdate({ stageComment })}
               showAddButton={showStageCommentAddButton}
-              topGap={readOnlyRehearsalMode && hideCharSelector ? "leading" : showCharacterSelector ? "compact" : undefined}
+              topGap={showCharacterSelector ? "compact" : undefined}
               readOnly={!canEditText || isEditingLocked}
               stageDelimOpen={stageDelimOpen}
               stageDelimClose={stageDelimClose}
