@@ -16,8 +16,8 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     return Response.json({ error: "权限不足" }, { status: 403 });
 
   const body = await req.json() as { fileName?: string; mimeType?: string; partCount?: number; fileSize?: number };
-  if (!body.fileName || !body.mimeType || !body.partCount || body.partCount < 1)
-    return Response.json({ error: "缺少 fileName / mimeType / partCount" }, { status: 400 });
+  if (!body.fileName || !body.mimeType)
+    return Response.json({ error: "缺少 fileName / mimeType" }, { status: 400 });
 
   // Dynamic expiry: assume 1 MB/s worst-case speed, 3× safety factor, clamp 1h–12h
   const fileMB = (body.fileSize ?? 0) / (1024 * 1024);
@@ -28,10 +28,14 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
   const uploadId = await createMultipartUpload(r2Key, body.mimeType);
 
-  const parts = Array.from({ length: body.partCount }, (_, i) => ({
-    partNumber: i + 1,
-    uploadUrl: presignedUploadPart(r2Key, uploadId, i + 1, expiresIn),
-  }));
+  // parts only generated when partCount is provided (legacy callers); adaptive
+  // callers omit partCount and fetch per-part URLs via /presign-part instead.
+  const parts = body.partCount && body.partCount > 0
+    ? Array.from({ length: body.partCount }, (_, i) => ({
+        partNumber: i + 1,
+        uploadUrl: presignedUploadPart(r2Key, uploadId, i + 1, expiresIn),
+      }))
+    : [];
 
   return Response.json({ uploadId, r2Key, fileId, parts });
 }
