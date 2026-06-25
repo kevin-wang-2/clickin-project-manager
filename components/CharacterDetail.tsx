@@ -17,6 +17,10 @@ type Props = {
   versionId?: string | null;
 };
 
+function isUpdatingResponse(payload: unknown): payload is { status: "updating" } {
+  return typeof payload === "object" && payload !== null && "status" in payload && payload.status === "updating";
+}
+
 function Field({
   label,
   value,
@@ -168,11 +172,13 @@ export default function CharacterDetailView({
   const [converting, setConverting] = useState(false);
 
   const patch = async (body: Record<string, unknown>) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${character.id}`, {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${character.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(versionId ? { ...body, versionId } : body),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) throw new Error(data.error ?? "更新失败");
   };
 
   const saveName = async (name: string) => {
@@ -184,7 +190,7 @@ export default function CharacterDetailView({
   };
 
   const saveMeta = async (fields: Partial<{ gender: string; biography: string; roleType: string }>) => {
-    await patch(versionId ? { ...fields, versionId } : fields);
+    await patch(fields);
     setCharacter((c) => ({ ...c, ...fields }));
   };
 
@@ -207,9 +213,13 @@ export default function CharacterDetailView({
   const del = async () => {
     setDeleting(true);
     try {
-      await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${character.id}`, {
+      const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${character.id}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(versionId ? { versionId } : {}),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || isUpdatingResponse(data)) throw new Error(data.error ?? "删除失败");
       router.push(`/production/${productionId}/characters`);
     } finally {
       setDeleting(false);

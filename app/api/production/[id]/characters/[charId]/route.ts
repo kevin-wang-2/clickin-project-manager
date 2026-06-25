@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import {
   getProductionMemberContext, patchCharacterMeta, setCharacterMembers,
-  getActiveVersionId, loadProduction, applyPatchToDB,
+  getActiveVersionId, loadProduction, applyPatchToDB, ensureScriptMarkerMigration, getVersion,
 } from "@/lib/db";
 import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
@@ -12,6 +12,16 @@ async function getCtx(req: NextRequest, productionId: string) {
   if (!session) return { session: null, memberRoles: null, overrides: new Map(), isArchived: false };
   const { memberRoles, overrides, isArchived } = await getProductionMemberContext(session.openId, session.isAdmin, productionId);
   return { session, memberRoles, overrides, isArchived };
+}
+
+async function resolveProductionVersion(productionId: string, requestedVersionId?: unknown) {
+  const versionId = ((typeof requestedVersionId === "string" && requestedVersionId) ? requestedVersionId : await getActiveVersionId(productionId)) ?? "";
+  if (!versionId) return { error: Response.json({ error: "无可用版本" }, { status: 404 }) };
+  const version = await getVersion(versionId);
+  if (!version || version.productionId !== productionId) {
+    return { error: Response.json({ error: "版本不存在" }, { status: 404 }) };
+  }
+  return { versionId };
 }
 
 export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production/[id]/characters/[charId]">) {
@@ -30,7 +40,14 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
     const memberIds: string[] = Array.isArray(body.memberIds)
       ? body.memberIds.filter((m: unknown) => typeof m === "string")
       : [];
-    await setCharacterMembers(charId, memberIds);
+    const resolved = await resolveProductionVersion(id, body.versionId);
+    if (resolved.error) return resolved.error;
+    const { versionId } = resolved;
+    const migration = await ensureScriptMarkerMigration(versionId);
+    if (migration.status === "running") {
+      return Response.json({ status: "updating", migration }, { status: 202 });
+    }
+    await setCharacterMembers(id, charId, memberIds);
     return Response.json({ ok: true });
   }
 
@@ -48,14 +65,24 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
           return getActiveVersionId(id);
         })();
     const resolvedMetaVersionId = typeof metaVersionId === "string" ? metaVersionId : await metaVersionId;
-    if (!resolvedMetaVersionId) return Response.json({ error: "无可用版本" }, { status: 400 });
-    await patchCharacterMeta(charId, resolvedMetaVersionId, meta);
+    const resolved = await resolveProductionVersion(id, resolvedMetaVersionId);
+    if (resolved.error) return resolved.error;
+    const migration = await ensureScriptMarkerMigration(resolved.versionId);
+    if (migration.status === "running") {
+      return Response.json({ status: "updating", migration }, { status: 202 });
+    }
+    await patchCharacterMeta(charId, resolved.versionId, meta);
     return Response.json({ ok: true });
   }
 
   // Structural fields (name, isAggregate)
-  const versionId = await getActiveVersionId(id) ?? '';
-  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+  const resolved = await resolveProductionVersion(id, body.versionId);
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
+  const migration = await ensureScriptMarkerMigration(versionId);
+  if (migration.status === "running") {
+    return Response.json({ status: "updating", migration }, { status: 202 });
+  }
 
   const result = await loadProduction(id, versionId);
   const char = result?.state.characters.find((c) => c.id === charId);
@@ -77,7 +104,7 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
 
   // When converting to/from aggregate, clear member associations
   if (typeof body.isAggregate === "boolean" && body.isAggregate !== char.isAggregate) {
-    await setCharacterMembers(charId, []);
+    await setCharacterMembers(id, charId, []);
   }
 
   return Response.json({ ok: true, char: updated });
@@ -92,8 +119,14 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/producti
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
 
-  const versionId = await getActiveVersionId(id) ?? '';
-  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+  const body = await _req.json().catch(() => ({}));
+  const resolved = await resolveProductionVersion(id, body.versionId);
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
+  const migration = await ensureScriptMarkerMigration(versionId);
+  if (migration.status === "running") {
+    return Response.json({ status: "updating", migration }, { status: 202 });
+  }
 
   await applyPatchToDB(id, versionId, {
     clientSeq: 0, blockOps: [], sceneOps: [],

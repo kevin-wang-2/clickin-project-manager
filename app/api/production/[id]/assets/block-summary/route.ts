@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { canUserAccessProduction } from "@/lib/db";
+import { canUserAccessProduction, getVersion } from "@/lib/db";
 import { getPool } from "@/lib/pg";
 
 type BlockAssetRow = {
@@ -18,6 +18,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!ok) return Response.json({ error: "权限不足" }, { status: 403 });
 
   const versionId = req.nextUrl.searchParams.get("v");
+  if (versionId) {
+    const version = await getVersion(versionId);
+    if (!version || version.productionId !== id) {
+      return Response.json({ error: "版本不存在" }, { status: 404 });
+    }
+  }
   const rows = versionId
     ? await getPool().query<BlockAssetRow>(
         `WITH version_blocks AS (

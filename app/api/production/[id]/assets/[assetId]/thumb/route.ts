@@ -1,8 +1,14 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { canUserAccessProduction } from "@/lib/db";
+import { canUserAccessProduction, getVersion } from "@/lib/db";
 import { getAsset, resolveAssetFile } from "@/lib/asset-db";
 import { getR2Object } from "@/lib/r2";
+
+async function validateVersion(productionId: string, versionId?: string | null) {
+  if (!versionId) return true;
+  const version = await getVersion(versionId);
+  return version?.productionId === productionId;
+}
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; assetId: string }> }) {
   const { id, assetId } = await ctx.params;
@@ -16,6 +22,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
   if (asset.storageType !== "r2") return new Response("非 R2 文件", { status: 400 });
 
   const versionId = req.nextUrl.searchParams.get("v") ?? undefined;
+  if (!(await validateVersion(id, versionId))) {
+    return new Response("版本不存在", { status: 404 });
+  }
   const file = await resolveAssetFile(assetId, versionId);
   if (!file?.thumbnailR2Key) return new Response("无缩略图", { status: 404 });
 

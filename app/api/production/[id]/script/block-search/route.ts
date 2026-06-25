@@ -1,19 +1,44 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, savePageMap, getActiveVersionId } from "@/lib/db";
+import { getProductionMemberContext, getActiveVersionId, listScenesByVersion, ensureScriptMarkerMigration, getVersion } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getPool } from "@/lib/pg";
 import { computePageMap } from "@/lib/script-page";
+import { MARKER_TYPES_SQL, VERSION_OWNED_BLOCKS_CTE } from "@/lib/script-marker-sql";
 import type { MentionSearchResult } from "@/lib/mention-types";
+import type { Block, BlockType } from "@/lib/script-types";
 
 export type { MentionSearchResult as ScriptBlockSearchResult };
 
 type Ctx = { params: Promise<{ id: string }> };
 type BlockRow = { id: string; type: string; content: string };
 type SceneRow = { id: string; num: string; name: string };
+type PageMapBlockRow = {
+  id: string;
+  snapshot_id: string;
+  type: string;
+  content: string;
+  scene_id: string | null;
+  rehearsal_mark: string | null;
+  stage_comment: string | null;
+  force_show_character_name: boolean;
+};
+
+function likePatternToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const source = escaped.replace(/%/g, ".*").replace(/_/g, ".");
+  return new RegExp(`^${source}$`, "i");
+}
 
 function blockDesc(r: { content: string }): string {
   return r.content.slice(0, 60);
+}
+
+async function resolveProductionVersion(productionId: string, requestedVersionId?: unknown) {
+  const versionId = ((typeof requestedVersionId === "string" && requestedVersionId) ? requestedVersionId : await getActiveVersionId(productionId)) ?? "";
+  if (!versionId) return null;
+  const version = await getVersion(versionId);
+  return version?.productionId === productionId ? versionId : null;
 }
 
 export async function GET(req: NextRequest, ctx: Ctx) {
@@ -31,7 +56,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   if (!q) return Response.json({ results: [] });
 
   const paramVersionId = req.nextUrl.searchParams.get("v") || null;
-  const effectiveVersionId = paramVersionId ?? await getActiveVersionId(productionId);
+  const effectiveVersionId = await resolveProductionVersion(productionId, paramVersionId);
+  if (paramVersionId && !effectiveVersionId) {
+    return Response.json({ error: "版本不存在" }, { status: 404 });
+  }
+  if (effectiveVersionId) {
+    const migration = await ensureScriptMarkerMigration(effectiveVersionId);
+    if (migration.status === "running") {
+      return Response.json({ status: "updating", migration }, { status: 202 });
+    }
+  }
 
   const pool = getPool();
   const results: MentionSearchResult[] = [];
@@ -64,20 +98,30 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       }
     }
   }
+  if (explicitVersionId && explicitVersionId !== effectiveVersionId) {
+    const migration = await ensureScriptMarkerMigration(explicitVersionId);
+    if (migration.status === "running") {
+      return Response.json({ status: "updating", migration }, { status: 202 });
+    }
+  }
 
   // ── Version-aware query helpers ────────────────────────────────────────────
 
   async function firstBlockInScene(sceneId: string): Promise<{ id: string } | null> {
     if (resolvedVersionId) {
       const r = await pool.query<{ id: string }>(
-        `SELECT sv.block_id AS id FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND s.scene_id = $2 ORDER BY sv.sort_key LIMIT 1`,
+        `${VERSION_OWNED_BLOCKS_CTE}
+         SELECT id FROM owned_blocks
+         WHERE scene_id = $2 AND type NOT IN (${MARKER_TYPES_SQL})
+         ORDER BY sort_key LIMIT 1`,
         [resolvedVersionId, sceneId]
       );
       return r.rows[0] ?? null;
     }
     const r = await pool.query<{ id: string }>(
-      "SELECT id FROM script WHERE production_id = $1 AND scene_id = $2 ORDER BY sort_key LIMIT 1",
+      `SELECT id FROM script
+       WHERE production_id = $1 AND scene_id = $2 AND type::text NOT IN (${MARKER_TYPES_SQL})
+       ORDER BY sort_key LIMIT 1`,
       [productionId, sceneId]
     );
     return r.rows[0] ?? null;
@@ -86,15 +130,18 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   async function markFirstBlock(sceneId: string, mark: string): Promise<{ id: string; sortKey: string } | null> {
     if (resolvedVersionId) {
       const r = await pool.query<{ id: string; sort_key: string }>(
-        `SELECT sv.block_id AS id, sv.sort_key FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND s.scene_id = $2 AND s.rehearsal_mark ILIKE $3
-         ORDER BY sv.sort_key LIMIT 1`,
+        `${VERSION_OWNED_BLOCKS_CTE}
+         SELECT id, sort_key FROM owned_blocks
+         WHERE scene_id = $2 AND rehearsal_mark ILIKE $3 AND type NOT IN (${MARKER_TYPES_SQL})
+         ORDER BY sort_key LIMIT 1`,
         [resolvedVersionId, sceneId, mark]
       );
       return r.rows[0] ? { id: r.rows[0].id, sortKey: r.rows[0].sort_key } : null;
     }
     const r = await pool.query<{ id: string; sort_key: string }>(
-      `SELECT id, sort_key FROM script WHERE production_id = $1 AND scene_id = $2 AND rehearsal_mark ILIKE $3 ORDER BY sort_key LIMIT 1`,
+      `SELECT id, sort_key FROM script
+       WHERE production_id = $1 AND scene_id = $2 AND rehearsal_mark ILIKE $3 AND type::text NOT IN (${MARKER_TYPES_SQL})
+       ORDER BY sort_key LIMIT 1`,
       [productionId, sceneId, mark]
     );
     return r.rows[0] ? { id: r.rows[0].id, sortKey: r.rows[0].sort_key } : null;
@@ -103,10 +150,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   async function nextMarkSortKey(sceneId: string, mark: string, afterKey: string): Promise<string | null> {
     if (resolvedVersionId) {
       const r = await pool.query<{ sort_key: string }>(
-        `SELECT sv.sort_key FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND s.scene_id = $2 AND s.rehearsal_mark IS NOT NULL
-           AND s.rehearsal_mark NOT ILIKE $3 AND sv.sort_key > $4
-         ORDER BY sv.sort_key LIMIT 1`,
+        `${VERSION_OWNED_BLOCKS_CTE}
+         SELECT sort_key FROM owned_blocks
+         WHERE scene_id = $2 AND rehearsal_mark IS NOT NULL AND rehearsal_mark NOT ILIKE $3 AND sort_key > $4
+         ORDER BY sort_key LIMIT 1`,
         [resolvedVersionId, sceneId, mark, afterKey]
       );
       return r.rows[0]?.sort_key ?? null;
@@ -114,6 +161,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     const r = await pool.query<{ sort_key: string }>(
       `SELECT sort_key FROM script WHERE production_id = $1 AND scene_id = $2
          AND rehearsal_mark IS NOT NULL AND rehearsal_mark NOT ILIKE $3 AND sort_key > $4
+         AND type::text NOT IN (${MARKER_TYPES_SQL})
        ORDER BY sort_key LIMIT 1`,
       [productionId, sceneId, mark, afterKey]
     );
@@ -123,16 +171,18 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   async function blocksInScene(sceneId: string): Promise<BlockRow[]> {
     if (resolvedVersionId) {
       const r = await pool.query<BlockRow>(
-        `SELECT sv.block_id AS id, s.type, s.content
-         FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND s.scene_id = $2 ORDER BY sv.sort_key LIMIT 15`,
+        `${VERSION_OWNED_BLOCKS_CTE}
+         SELECT id, type, content FROM owned_blocks
+         WHERE scene_id = $2 AND type NOT IN (${MARKER_TYPES_SQL})
+         ORDER BY sort_key LIMIT 15`,
         [resolvedVersionId, sceneId]
       );
       return r.rows;
     }
     const r = await pool.query<BlockRow>(
       `SELECT s.id, s.type, s.content FROM script s
-       WHERE s.production_id = $1 AND s.scene_id = $2 ORDER BY s.sort_key LIMIT 15`,
+       WHERE s.production_id = $1 AND s.scene_id = $2 AND s.type::text NOT IN (${MARKER_TYPES_SQL})
+       ORDER BY s.sort_key LIMIT 15`,
       [productionId, sceneId]
     );
     return r.rows;
@@ -142,17 +192,17 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     if (resolvedVersionId) {
       const r = toKey
         ? await pool.query<BlockRow>(
-            `SELECT sv.block_id AS id, s.type, s.content
-             FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-             WHERE sv.version_id = $1 AND s.scene_id = $2 AND sv.sort_key >= $3 AND sv.sort_key < $4
-             ORDER BY sv.sort_key LIMIT 15`,
+            `${VERSION_OWNED_BLOCKS_CTE}
+             SELECT id, type, content FROM owned_blocks
+             WHERE scene_id = $2 AND type NOT IN (${MARKER_TYPES_SQL}) AND sort_key >= $3 AND sort_key < $4
+             ORDER BY sort_key LIMIT 15`,
             [resolvedVersionId, sceneId, fromKey, toKey]
           )
         : await pool.query<BlockRow>(
-            `SELECT sv.block_id AS id, s.type, s.content
-             FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-             WHERE sv.version_id = $1 AND s.scene_id = $2 AND sv.sort_key >= $3
-             ORDER BY sv.sort_key LIMIT 15`,
+            `${VERSION_OWNED_BLOCKS_CTE}
+             SELECT id, type, content FROM owned_blocks
+             WHERE scene_id = $2 AND type NOT IN (${MARKER_TYPES_SQL}) AND sort_key >= $3
+             ORDER BY sort_key LIMIT 15`,
             [resolvedVersionId, sceneId, fromKey]
           );
       return r.rows;
@@ -161,12 +211,14 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       ? await pool.query<BlockRow>(
           `SELECT s.id, s.type, s.content FROM script s
            WHERE s.production_id = $1 AND s.scene_id = $2 AND s.sort_key >= $3 AND s.sort_key < $4
+             AND s.type::text NOT IN (${MARKER_TYPES_SQL})
            ORDER BY s.sort_key LIMIT 15`,
           [productionId, sceneId, fromKey, toKey]
         )
       : await pool.query<BlockRow>(
           `SELECT s.id, s.type, s.content FROM script s
            WHERE s.production_id = $1 AND s.scene_id = $2 AND s.sort_key >= $3
+             AND s.type::text NOT IN (${MARKER_TYPES_SQL})
            ORDER BY s.sort_key LIMIT 15`,
           [productionId, sceneId, fromKey]
         );
@@ -174,53 +226,80 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   }
 
   async function queryScenes(numPattern: string, limit: number): Promise<SceneRow[]> {
-    if (resolvedVersionId) {
-      const r = await pool.query<SceneRow>(
-        `SELECT s.id, sv.num, sv.name
-         FROM scene s JOIN scene_version sv ON sv.scene_id = s.id AND sv.version_id = $1
-         WHERE s.production_id = $2 AND sv.num ILIKE $3
-         ORDER BY sv.sort_order LIMIT $4`,
-        [resolvedVersionId, productionId, numPattern, limit]
-      );
-      return r.rows;
-    }
-    return [];
+    const matcher = likePatternToRegex(numPattern);
+    return (await loadGeneratedScenes())
+      .filter(scene => matcher.test(scene.num))
+      .slice(0, limit);
   }
 
   async function queryScenesText(textPattern: string, limit: number): Promise<SceneRow[]> {
-    if (resolvedVersionId) {
-      const r = await pool.query<SceneRow>(
-        `SELECT s.id, sv.num, sv.name
-         FROM scene s JOIN scene_version sv ON sv.scene_id = s.id AND sv.version_id = $1
-         WHERE s.production_id = $2 AND (sv.num ILIKE $3 OR sv.name ILIKE $3)
-         ORDER BY sv.sort_order LIMIT $4`,
-        [resolvedVersionId, productionId, textPattern, limit]
-      );
-      return r.rows;
-    }
-    return [];
+    const matcher = likePatternToRegex(textPattern);
+    return (await loadGeneratedScenes())
+      .filter(scene => matcher.test(scene.num) || matcher.test(scene.name))
+      .slice(0, limit);
   }
 
-  async function getPageMap(): Promise<Record<string, number>> {
-    const pmRes = await pool.query<{ page_map: Record<string, Record<string, number>> | null }>(
-      "SELECT page_map FROM production WHERE id = $1", [productionId]
-    );
-    const stored = pmRes.rows[0]?.page_map?.["a4"];
-    if (stored && Object.keys(stored).length > 0) return stored;
+  let generatedScenesPromise: Promise<SceneRow[]> | null = null;
+  async function loadGeneratedScenes(): Promise<SceneRow[]> {
+    if (!resolvedVersionId) return [];
+    generatedScenesPromise ??= listScenesByVersion(resolvedVersionId).then((scenes) => scenes.map((scene) => ({
+      id: scene.id,
+      num: scene.number,
+      name: scene.name,
+    })));
+    return generatedScenesPromise;
+  }
 
-    const blocksRes = await pool.query<{ id: string; type: string; content: string; scene_id: string | null }>(
-      "SELECT id, type, content, scene_id FROM script WHERE production_id = $1 ORDER BY sort_key",
-      [productionId]
-    );
-    const blocks = blocksRes.rows.map(r => ({
-      id: r.id, type: r.type === "stage" ? "stage" as const : "dialogue" as const,
-      content: r.content, sceneId: r.scene_id,
-      characterIds: [], characterAnnotations: {} as Record<string, string>,
-      lyric: false, rehearsalMark: null,
-    }));
-    const computed = computePageMap(blocks);
-    savePageMap(productionId, { a4: computed }).catch(() => {});
-    return computed;
+  let pageMapPromise: Promise<Record<string, number>> | null = null;
+  async function getPageMap(): Promise<Record<string, number>> {
+    if (pageMapPromise) return pageMapPromise;
+    pageMapPromise = (async () => {
+      const blocksRes = resolvedVersionId
+        ? await pool.query<PageMapBlockRow>(
+            `${VERSION_OWNED_BLOCKS_CTE},
+             version_snapshots AS (
+               SELECT block_id, snapshot_id
+               FROM script_version
+               WHERE version_id = $1
+             )
+             SELECT ob.id, vs.snapshot_id, ob.type, ob.content, ob.scene_id, ob.rehearsal_mark,
+                    s.stage_comment, s.force_show_character_name
+             FROM owned_blocks ob
+             JOIN version_snapshots vs ON vs.block_id = ob.id
+             JOIN script s ON s.id = vs.snapshot_id
+             ORDER BY ob.sort_key`,
+            [resolvedVersionId]
+          )
+        : await pool.query<PageMapBlockRow>(
+            `SELECT id, id AS snapshot_id, type::text AS type, content, scene_id, rehearsal_mark,
+                    stage_comment, force_show_character_name
+             FROM script
+             WHERE production_id = $1
+             ORDER BY sort_key`,
+            [productionId]
+          );
+      const snapshotIds = blocksRes.rows.map(r => r.snapshot_id);
+      const charRes = snapshotIds.length > 0
+        ? await pool.query<{ script_id: string; character_id: string }>(
+            "SELECT script_id, character_id FROM script_character WHERE script_id = ANY($1::text[]) ORDER BY script_id, position",
+            [snapshotIds]
+          )
+        : { rows: [] as Array<{ script_id: string; character_id: string }> };
+      const charMap = new Map<string, string[]>();
+      for (const row of charRes.rows) {
+        if (!charMap.has(row.script_id)) charMap.set(row.script_id, []);
+        charMap.get(row.script_id)!.push(row.character_id);
+      }
+      const blocks: Block[] = blocksRes.rows.map(r => ({
+        id: r.id, type: (["stage", "chapter_marker", "scene_marker", "rehearsal_marker"].includes(r.type) ? r.type : "dialogue") as BlockType,
+        content: r.content, stageComment: r.stage_comment, forceShowCharacterName: r.force_show_character_name,
+        sceneId: r.scene_id,
+        characterIds: charMap.get(r.snapshot_id) ?? [], characterAnnotations: {} as Record<string, string>,
+        lyric: r.type === "lyric", rehearsalMark: r.rehearsal_mark,
+      }));
+      return computePageMap(blocks, "a4", "center", !!resolvedVersionId);
+    })();
+    return pageMapPromise;
   }
 
   function withVer(r: Omit<MentionSearchResult, "versionId">): MentionSearchResult {
@@ -281,17 +360,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
       const blockIdx = parseInt(blockPageM[2]) - 1;
       const pageMap = await getPageMap();
       const pageBlockIds = Object.entries(pageMap).filter(([, p]) => p === pageNum).map(([id]) => id);
-      let blockId: string | undefined;
-      if (resolvedVersionId) {
-        const r = await pool.query<{ id: string }>(
-          `SELECT sv.block_id AS id FROM script_version sv
-           WHERE sv.version_id = $1 AND sv.block_id = ANY($2::text[]) ORDER BY sv.sort_key`,
-          [resolvedVersionId, pageBlockIds]
-        );
-        blockId = r.rows[blockIdx]?.id;
-      } else {
-        blockId = pageBlockIds[blockIdx];
-      }
+      const blockId = pageBlockIds[blockIdx];
       if (!blockId) return [];
       return queryAssetsByMount(["block", "block_snapshot"], blockId, namePrefix, mountQuery);
     }
@@ -393,14 +462,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
           const r = await pool.query<BlockRow>(
             `SELECT sv.block_id AS id, s.type, s.content
              FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-             WHERE sv.version_id = $1 AND sv.block_id = ANY($2::text[]) ORDER BY sv.sort_key LIMIT 15`,
+             WHERE sv.version_id = $1 AND sv.block_id = ANY($2::text[]) AND s.type::text NOT IN (${MARKER_TYPES_SQL})
+             ORDER BY sv.sort_key LIMIT 15`,
             [resolvedVersionId, blockIds]
           );
           rows = r.rows;
         } else {
           const r = await pool.query<BlockRow>(
             `SELECT s.id, s.type, s.content FROM script s
-             WHERE s.id = ANY($1::text[]) AND s.production_id = $2 ORDER BY s.sort_key LIMIT 15`,
+             WHERE s.id = ANY($1::text[]) AND s.production_id = $2 AND s.type::text NOT IN (${MARKER_TYPES_SQL})
+             ORDER BY s.sort_key LIMIT 15`,
             [blockIds, productionId]
           );
           rows = r.rows;
@@ -493,15 +564,19 @@ export async function GET(req: NextRequest, ctx: Ctx) {
 
       const marksRes = resolvedVersionId
         ? await pool.query<{ rehearsal_mark: string }>(
-            `SELECT DISTINCT s.rehearsal_mark FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-             WHERE sv.version_id = $1 AND s.scene_id = $2 AND s.rehearsal_mark IS NOT NULL
-             ORDER BY s.rehearsal_mark LIMIT 5`,
+            `${VERSION_OWNED_BLOCKS_CTE}
+             SELECT rehearsal_mark FROM owned_blocks
+             WHERE scene_id = $2 AND rehearsal_mark IS NOT NULL
+             GROUP BY rehearsal_mark
+             ORDER BY MIN(sort_key) LIMIT 5`,
             [resolvedVersionId, scene.id]
           )
         : await pool.query<{ rehearsal_mark: string }>(
-            `SELECT DISTINCT rehearsal_mark FROM script
+            `SELECT rehearsal_mark FROM script
              WHERE production_id = $1 AND scene_id = $2 AND rehearsal_mark IS NOT NULL
-             ORDER BY rehearsal_mark LIMIT 5`,
+               AND type::text NOT IN (${MARKER_TYPES_SQL})
+             GROUP BY rehearsal_mark
+             ORDER BY MIN(sort_key) LIMIT 5`,
             [productionId, scene.id]
           );
       for (const m of marksRes.rows) {

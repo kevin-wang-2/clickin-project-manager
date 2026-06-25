@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { getProductionMemberContext, getCueList, listCueListPermissions, updateCue, deleteCue,
-         getCue, listProductionMembersWithRoles, getProductionName } from "@/lib/db";
+         getCue, listProductionMembersWithRoles, getProductionName, getVersion } from "@/lib/db";
 import { canEditCueList } from "@/lib/cue-list-types";
 import type { CueAnchor } from "@/lib/cue-types";
 import { broadcastCueUpdate } from "@/lib/server-cache";
@@ -30,6 +30,15 @@ async function checkEdit(req: NextRequest, id: string, cueListId: string) {
   return { ok: true, session, memberRoles, isArchived, status: 200 as const };
 }
 
+async function resolveVersion(productionId: string, versionId?: string | null) {
+  if (!versionId) return { versionId: undefined };
+  const version = await getVersion(versionId);
+  if (!version || version.productionId !== productionId) {
+    return { error: Response.json({ error: "版本不存在" }, { status: 404 }) };
+  }
+  return { versionId };
+}
+
 export async function PATCH(
   req: NextRequest,
   ctx: RouteContext<"/api/production/[id]/cuelists/[cueListId]/cues/[cueId]">
@@ -38,7 +47,9 @@ export async function PATCH(
   const check = await checkEdit(req, id, cueListId);
   if (!check.ok) return Response.json({ error: "权限不足或不存在" }, { status: check.status });
 
-  const versionId = req.nextUrl.searchParams.get("v") ?? undefined;
+  const resolved = await resolveVersion(id, req.nextUrl.searchParams.get("v"));
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
   const body = await req.json() as {
     number?: string; name?: string; content?: string;
     start?: CueAnchor; end?: CueAnchor; warning?: boolean;
@@ -137,7 +148,9 @@ export async function DELETE(
   const check = await checkEdit(req, id, cueListId);
   if (!check.ok) return Response.json({ error: "权限不足或不存在" }, { status: check.status });
 
-  const versionId = req.nextUrl.searchParams.get("v") ?? undefined;
+  const resolved = await resolveVersion(id, req.nextUrl.searchParams.get("v"));
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
   await deleteCue(cueId, cueListId, versionId);
   broadcastCueUpdate(id);
   return Response.json({ ok: true });

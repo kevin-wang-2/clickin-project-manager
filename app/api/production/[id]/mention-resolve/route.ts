@@ -1,9 +1,12 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getActiveVersionId } from "@/lib/db";
+import { getProductionMemberContext, getActiveVersionId, listScenesByVersion, ensureScriptMarkerMigration, getVersion } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getPool } from "@/lib/pg";
+import { MARKER_TYPES_SQL, VERSION_OWNED_BLOCKS_CTE } from "@/lib/script-marker-sql";
+import { computePageMap } from "@/lib/script-page";
 import type { ContentMentionAttrs, BlockDisplayMode } from "@/lib/mention-types";
+import type { Block, BlockType } from "@/lib/script-types";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -11,6 +14,24 @@ type ResolveInput = {
   mentions: ContentMentionAttrs[];
   versionId?: string | null;
 };
+
+type PageMapBlockRow = {
+  id: string;
+  snapshot_id: string;
+  type: string;
+  content: string;
+  scene_id: string | null;
+  rehearsal_mark: string | null;
+  stage_comment: string | null;
+  force_show_character_name: boolean;
+};
+
+async function resolveProductionVersion(productionId: string, requestedVersionId?: unknown) {
+  const versionId = ((typeof requestedVersionId === "string" && requestedVersionId) ? requestedVersionId : await getActiveVersionId(productionId)) ?? "";
+  if (!versionId) return null;
+  const version = await getVersion(versionId);
+  return version?.productionId === productionId ? versionId : null;
+}
 
 export async function POST(req: NextRequest, ctx: Ctx) {
   const { id: productionId } = await ctx.params;
@@ -30,13 +51,90 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   }
 
   const pool = getPool();
-  const effectiveVersionId = contextVersionId ?? await getActiveVersionId(productionId);
+  const effectiveVersionId = await resolveProductionVersion(productionId, contextVersionId);
+  if (contextVersionId && !effectiveVersionId) {
+    return Response.json({ error: "版本不存在" }, { status: 404 });
+  }
+  if (effectiveVersionId) {
+    const migration = await ensureScriptMarkerMigration(effectiveVersionId);
+    if (migration.status === "running") {
+      return Response.json({ status: "updating", migration }, { status: 202 });
+    }
+  }
   const vParam = effectiveVersionId ? `?v=${effectiveVersionId}` : "";
   const vAmp = effectiveVersionId ? `&v=${effectiveVersionId}` : "";
   const base = `/production/${productionId}`;
 
   const labels: (string | null)[] = new Array(mentions.length).fill(null);
   const urls: (string | null)[] = new Array(mentions.length).fill(null);
+
+  let generatedSceneNumMapPromise: Promise<Map<string, string>> | null = null;
+  async function loadGeneratedSceneNumMap(): Promise<Map<string, string>> {
+    if (!effectiveVersionId) return new Map();
+    generatedSceneNumMapPromise ??= listScenesByVersion(effectiveVersionId)
+      .then((scenes) => new Map(scenes.map((scene) => [scene.id, scene.number])));
+    return generatedSceneNumMapPromise;
+  }
+
+  let pageMapPromise: Promise<Record<string, number>> | null = null;
+  async function loadPageMap(): Promise<Record<string, number>> {
+    if (pageMapPromise) return pageMapPromise;
+
+    pageMapPromise = (async () => {
+      const blocksRes = effectiveVersionId
+        ? await pool.query<PageMapBlockRow>(
+            `${VERSION_OWNED_BLOCKS_CTE},
+             version_snapshots AS (
+               SELECT block_id, snapshot_id
+               FROM script_version
+               WHERE version_id = $1
+             )
+             SELECT ob.id, vs.snapshot_id, ob.type, ob.content, ob.scene_id, ob.rehearsal_mark,
+                    s.stage_comment, s.force_show_character_name
+             FROM owned_blocks ob
+             JOIN version_snapshots vs ON vs.block_id = ob.id
+             JOIN script s ON s.id = vs.snapshot_id
+             ORDER BY ob.sort_key`,
+            [effectiveVersionId]
+          )
+        : await pool.query<PageMapBlockRow>(
+            `SELECT id, id AS snapshot_id, type::text AS type, content, scene_id, rehearsal_mark,
+                    stage_comment, force_show_character_name
+             FROM script
+             WHERE production_id = $1
+             ORDER BY sort_key`,
+            [productionId]
+          );
+
+      const snapshotIds = blocksRes.rows.map((row) => row.snapshot_id);
+      const charRes = snapshotIds.length > 0
+        ? await pool.query<{ script_id: string; character_id: string }>(
+            "SELECT script_id, character_id FROM script_character WHERE script_id = ANY($1::text[]) ORDER BY script_id, position",
+            [snapshotIds]
+          )
+        : { rows: [] as Array<{ script_id: string; character_id: string }> };
+      const charMap = new Map<string, string[]>();
+      for (const row of charRes.rows) {
+        if (!charMap.has(row.script_id)) charMap.set(row.script_id, []);
+        charMap.get(row.script_id)!.push(row.character_id);
+      }
+
+      const blocks: Block[] = blocksRes.rows.map((row) => ({
+        id: row.id,
+        type: (["stage", "chapter_marker", "scene_marker", "rehearsal_marker"].includes(row.type) ? row.type : "dialogue") as BlockType,
+        content: row.content,
+        stageComment: row.stage_comment,
+        characterIds: charMap.get(row.snapshot_id) ?? [],
+        characterAnnotations: {},
+        forceShowCharacterName: row.force_show_character_name,
+        lyric: row.type === "lyric",
+        sceneId: row.scene_id,
+        rehearsalMark: row.rehearsal_mark,
+      }));
+      return computePageMap(blocks, "a4", "center", !!effectiveVersionId);
+    })();
+    return pageMapPromise;
+  }
 
   // Group by kind for batch queries
   const byKind = new Map<string, number[]>();
@@ -57,12 +155,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // ── scene + rehearsal (both need scene_version) ───────────────────────────
   const sceneIdxs = [...(byKind.get("scene") ?? []), ...(byKind.get("rehearsal") ?? [])];
   if (sceneIdxs.length > 0 && effectiveVersionId) {
-    const sceneIds = sceneIdxs.map(i => mentions[i].id);
-    const r = await pool.query<{ scene_id: string; num: string }>(
-      `SELECT scene_id, num FROM scene_version WHERE version_id = $1 AND scene_id = ANY($2::text[])`,
-      [effectiveVersionId, sceneIds]
-    );
-    const numByScene = new Map(r.rows.map(row => [row.scene_id, row.num]));
+    const numByScene = await loadGeneratedSceneNumMap();
     for (const i of sceneIdxs) {
       const m = mentions[i];
       const num = numByScene.get(m.id);
@@ -82,7 +175,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   // ── block ─────────────────────────────────────────────────────────────────
   if (byKind.has("block")) {
     const blockIdxs = byKind.get("block")!;
-    const blockIds = blockIdxs.map(i => mentions[i].id);
 
     // Group by displayMode
     const byMode = new Map<BlockDisplayMode, number[]>();
@@ -97,25 +189,21 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       const idxs = byMode.get("scene")!;
       const ids = idxs.map(i => mentions[i].id);
       const r = await pool.query<{ block_id: string; scene_id: string; row_num: string }>(
-        `SELECT sv.block_id, s.scene_id,
-                ROW_NUMBER() OVER (PARTITION BY s.scene_id ORDER BY sv.sort_key) AS row_num
-         FROM script_version sv
-         JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND sv.block_id = ANY($2::text[])`,
+        `${VERSION_OWNED_BLOCKS_CTE},
+         numbered_blocks AS (
+           SELECT id AS block_id, scene_id,
+                  ROW_NUMBER() OVER (PARTITION BY scene_id ORDER BY sort_key) AS row_num
+           FROM owned_blocks
+           WHERE type NOT IN (${MARKER_TYPES_SQL})
+         )
+         SELECT block_id, scene_id, row_num
+         FROM numbered_blocks
+         WHERE block_id = ANY($2::text[])`,
         [effectiveVersionId, ids]
       );
       const posMap = new Map(r.rows.map(row => [row.block_id, { sceneId: row.scene_id, pos: parseInt(row.row_num) }]));
 
-      // Fetch scene nums
-      const sceneIds = [...new Set(r.rows.map(row => row.scene_id))];
-      let sceneNumMap = new Map<string, string>();
-      if (sceneIds.length > 0 && effectiveVersionId) {
-        const sr = await pool.query<{ scene_id: string; num: string }>(
-          `SELECT scene_id, num FROM scene_version WHERE version_id = $1 AND scene_id = ANY($2::text[])`,
-          [effectiveVersionId, sceneIds]
-        );
-        sceneNumMap = new Map(sr.rows.map(row => [row.scene_id, row.num]));
-      }
+      const sceneNumMap = await loadGeneratedSceneNumMap();
 
       for (const i of idxs) {
         const blockId = mentions[i].id;
@@ -127,13 +215,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       }
     }
 
-    // page mode: compute from page_map
+    // page mode: compute from the effective version's marker-owned blocks
     if (byMode.has("page")) {
       const idxs = byMode.get("page")!;
-      const pmRes = await pool.query<{ page_map: Record<string, Record<string, number>> | null }>(
-        "SELECT page_map FROM production WHERE id = $1", [productionId]
-      );
-      const pageMap: Record<string, number> = pmRes.rows[0]?.page_map?.["a4"] ?? {};
+      const pageMap = await loadPageMap();
       // Group block ids by page
       const pageGroups = new Map<number, string[]>();
       for (const [bid, pg] of Object.entries(pageMap)) {
@@ -155,33 +240,28 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     if (byMode.has("rehearsal") && effectiveVersionId) {
       const idxs = byMode.get("rehearsal")!;
       const ids = idxs.map(i => mentions[i].id);
-      const r = await pool.query<{ block_id: string; scene_id: string; rehearsal_mark: string | null; sort_key: string }>(
-        `SELECT sv.block_id, s.scene_id, s.rehearsal_mark, sv.sort_key
-         FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-         WHERE sv.version_id = $1 AND sv.block_id = ANY($2::text[])`,
+      const r = await pool.query<{ block_id: string; scene_id: string; rehearsal_mark: string | null; row_num: string }>(
+        `${VERSION_OWNED_BLOCKS_CTE},
+         numbered_rehearsal_blocks AS (
+           SELECT id AS block_id, scene_id, rehearsal_mark,
+                  ROW_NUMBER() OVER (PARTITION BY scene_id, rehearsal_mark ORDER BY sort_key) AS row_num
+           FROM owned_blocks
+           WHERE type NOT IN (${MARKER_TYPES_SQL}) AND rehearsal_mark IS NOT NULL
+         )
+         SELECT block_id, scene_id, rehearsal_mark, row_num
+         FROM numbered_rehearsal_blocks
+         WHERE block_id = ANY($2::text[])`,
         [effectiveVersionId, ids]
       );
       const blockInfo = new Map(r.rows.map(row => [row.block_id, row]));
+      const sceneNumMap = await loadGeneratedSceneNumMap();
 
       for (const i of idxs) {
         const blockId = mentions[i].id;
         const info = blockInfo.get(blockId);
         if (!info || !info.rehearsal_mark) { labels[i] = "#[已删除]"; continue; }
-
-        // Count blocks with same mark in same scene before this sort_key
-        const posRes = await pool.query<{ count: string }>(
-          `SELECT COUNT(*) AS count FROM script_version sv JOIN script s ON s.id = sv.snapshot_id
-           WHERE sv.version_id = $1 AND s.scene_id = $2 AND s.rehearsal_mark = $3 AND sv.sort_key <= $4`,
-          [effectiveVersionId, info.scene_id, info.rehearsal_mark, info.sort_key]
-        );
-        const pos = parseInt(posRes.rows[0]?.count ?? "0");
-
-        // Get scene num
-        const snRes = await pool.query<{ num: string }>(
-          `SELECT num FROM scene_version WHERE version_id = $1 AND scene_id = $2`,
-          [effectiveVersionId, info.scene_id]
-        );
-        const num = snRes.rows[0]?.num;
+        const pos = parseInt(info.row_num, 10);
+        const num = sceneNumMap.get(info.scene_id);
         labels[i] = num ? `#${num}${info.rehearsal_mark}-${pos}` : "#[已删除]";
         urls[i] = `${base}/script${vParam}#block-${blockId}`;
       }
@@ -249,7 +329,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           break;
         case "scene":
         case "scene_snapshot":
-          // scene_snapshot mount_id is the stable scene_id
+          // scene_snapshot mount_id is the marker block id.
           urls[i] = `${base}/dramaturgy${vParam ? vParam + "&" : "?"}sceneId=${mountId}`;
           break;
         case "block":

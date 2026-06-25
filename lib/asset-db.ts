@@ -313,16 +313,17 @@ export async function listAssetMounts(assetId: string): Promise<AssetMount[]> {
 
 /** Get all assets (with their mounts) at a specific mount point. */
 export async function getAssetsByMountPoint(
+  productionId: string,
   mountType: MountType,
   mountId: string,
   mountAuxId?: string | null
 ): Promise<Array<{ mount: AssetMount; asset: Asset }>> {
-  const params: (string | null)[] = [mountType, mountId];
-  const auxClause = mountAuxId !== undefined ? " AND mount_aux_id = $3" : "";
+  const params: (string | null)[] = [productionId, mountType, mountId];
+  const auxClause = mountAuxId !== undefined ? " AND mount_aux_id = $4" : "";
   if (mountAuxId !== undefined) params.push(mountAuxId ?? null);
 
   const mountsRes = await getPool().query<AssetMountRow>(
-    `SELECT * FROM asset_mount WHERE mount_type = $1 AND mount_id = $2${auxClause} ORDER BY created_at DESC`,
+    `SELECT * FROM asset_mount WHERE production_id = $1 AND mount_type = $2 AND mount_id = $3${auxClause} ORDER BY created_at DESC`,
     params
   );
   if (mountsRes.rows.length === 0) return [];
