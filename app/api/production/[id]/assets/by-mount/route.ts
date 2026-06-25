@@ -17,6 +17,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return Response.json({ error: "缺少 type 或 id 参数" }, { status: 400 });
 
   const mountAuxId = sp.has("auxId") ? sp.get("auxId") : undefined;
-  const results = await getAssetsByMountPoint(mountType, mountId, mountAuxId);
+  const results = await getAssetsByMountPoint(id, mountType, mountId, mountAuxId);
   return Response.json({ results });
 }

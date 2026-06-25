@@ -4,7 +4,7 @@ export const metadata: Metadata = { title: "角色" };
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getProductionName, listCharactersByVersion, getActiveVersionId } from "@/lib/db";
+import { getProductionMemberContext, getProductionName, listCharactersByVersion, listVersions } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import CharactersManager from "@/components/CharactersManager";
 
@@ -23,13 +23,18 @@ export default async function CharactersPage({
 
   const canEdit = hasPermission("script:metadata", session.isAdmin, memberRoles, overrides);
 
-  const versionId = cookieStore.get(`ver_${id}`)?.value ?? await getActiveVersionId(id) ?? null;
+  const cookieVersionId = cookieStore.get(`ver_${id}`)?.value ?? null;
 
-  const [name, characters] = await Promise.all([
+  const [name, versions] = await Promise.all([
     getProductionName(id),
-    versionId ? listCharactersByVersion(versionId) : Promise.resolve([]),
+    listVersions(id),
   ]);
   if (!name) redirect("/");
+  const versionId = (cookieVersionId && versions.some(v => v.id === cookieVersionId) ? cookieVersionId : null)
+    ?? versions.find(v => v.status === "editing")?.id
+    ?? versions[0]?.id
+    ?? null;
+  const characters = versionId ? await listCharactersByVersion(versionId) : [];
 
   return (
     <CharactersManager

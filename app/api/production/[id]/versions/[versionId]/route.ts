@@ -53,14 +53,14 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   }
 
   if (body.status !== undefined) {
-    await updateVersionStatus(versionId, body.status);
+    await updateVersionStatus(id, versionId, body.status);
   }
 
   const metaFields: { name?: string; description?: string; tags?: string[] } = {};
   if (body.name        !== undefined) metaFields.name        = body.name;
   if (body.description !== undefined) metaFields.description = body.description;
   if (body.tags        !== undefined) metaFields.tags        = body.tags;
-  if (Object.keys(metaFields).length > 0) await updateVersionMeta(versionId, metaFields);
+  if (Object.keys(metaFields).length > 0) await updateVersionMeta(id, versionId, metaFields);
 
   const updated = await getVersion(versionId);
   return Response.json({ version: updated });

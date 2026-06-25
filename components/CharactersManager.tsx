@@ -17,6 +17,10 @@ type Props = {
   initialExpandedId?: string;
 };
 
+function isUpdatingResponse(payload: unknown): payload is { status: "updating" } {
+  return typeof payload === "object" && payload !== null && "status" in payload && payload.status === "updating";
+}
+
 function MetaField({
   label,
   value,
@@ -351,10 +355,12 @@ function AddCharacterForm({
   productionId,
   allChars,
   onAdd,
+  versionId,
 }: {
   productionId: string;
   allChars: CharacterDetail[];
   onAdd: (char: CharacterDetail) => void;
+  versionId?: string | null;
 }) {
   const [draft, setDraft] = useState("");
   const [isAggregate, setIsAggregate] = useState(false);
@@ -378,10 +384,12 @@ function AddCharacterForm({
       const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, isAggregate, memberIds: isAggregate ? memberIds : [] }),
+        body: JSON.stringify(versionId
+          ? { name, isAggregate, memberIds: isAggregate ? memberIds : [], versionId }
+          : { name, isAggregate, memberIds: isAggregate ? memberIds : [] }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error ?? "添加失败"); return; }
+      if (!res.ok || isUpdatingResponse(data)) { setError(data.error ?? "添加失败"); return; }
       onAdd(data.char);
       setDraft("");
       setIsAggregate(false);
@@ -452,44 +460,58 @@ export default function CharactersManager({ productionId, productionName, initia
   const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId ?? null);
 
   const rename = async (id: string, name: string) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(versionId ? { name, versionId } : { name }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) return;
     setCharacters((prev) => prev.map((c) => c.id === id ? { ...c, name } : c));
   };
 
   const del = async (id: string) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, { method: "DELETE" });
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(versionId ? { versionId } : {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) return;
     setCharacters((prev) => prev.filter((c) => c.id !== id));
     if (expandedId === id) setExpandedId(null);
   };
 
   const patchMeta = async (id: string, fields: Partial<{ gender: string; biography: string; roleType: string }>) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(versionId ? { ...fields, versionId } : fields),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) return;
     setCharacters((prev) => prev.map((c) => c.id === id ? { ...c, ...fields } : c));
   };
 
   const updateMembers = async (id: string, memberIds: string[]) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ memberIds }),
+      body: JSON.stringify(versionId ? { memberIds, versionId } : { memberIds }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) return;
     setCharacters((prev) => prev.map((c) => c.id === id ? { ...c, memberIds } : c));
   };
 
   const convert = async (id: string, toAggregate: boolean) => {
-    await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
+    const res = await fetch(`${BASE_PATH}/api/production/${productionId}/characters/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ isAggregate: toAggregate }),
+      body: JSON.stringify(versionId ? { isAggregate: toAggregate, versionId } : { isAggregate: toAggregate }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || isUpdatingResponse(data)) return;
     setCharacters((prev) => prev.map((c) => c.id === id ? { ...c, isAggregate: toAggregate, memberIds: [] } : c));
   };
 
@@ -532,6 +554,7 @@ export default function CharactersManager({ productionId, productionName, initia
               productionId={productionId}
               allChars={characters}
               onAdd={(char) => setCharacters((prev) => [...prev, char])}
+              versionId={versionId}
             />
           )}
         </div>
