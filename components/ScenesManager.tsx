@@ -361,7 +361,7 @@ function InsertSceneRow({
                     disabled={adding || (open === "scene" && !draftName.trim())}
                     className={`rounded px-2 py-1 text-xs transition-colors disabled:opacity-30 ${open === "scene" ? "bg-blue-600 text-white" : "text-zinc-500 hover:bg-zinc-100"}`}
                   >
-                    添加场景
+                    添加段落
                   </button>
                 )}
                 <button
