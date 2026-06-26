@@ -1411,7 +1411,7 @@ function ScenePanel({
                                 onClick={() => onAdd(s.id, { insertAfterSceneId: s.id })}
                                 className="text-[11px] text-zinc-300 hover:text-zinc-500 transition-colors"
                               >
-                                + 添加场景
+                                + 添加段落
                               </button>
                             </td>
                           </tr>
@@ -1428,7 +1428,7 @@ function ScenePanel({
               onClick={() => onAdd(undefined, scenes.length > 0 ? { insertAfterSceneId: scenes[scenes.length - 1].id } : undefined)}
               className="w-full rounded-lg border border-dashed border-zinc-200 py-1.5 text-sm text-zinc-400 transition-colors hover:border-zinc-400 hover:text-zinc-600"
             >
-              + 添加幕
+              + 添加章节
             </button>
           </div>
         </div>

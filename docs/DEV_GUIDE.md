@@ -24,7 +24,7 @@
 │   │   ├── production/[id]/# 剧目相关 API（assets、events、cuelists 等）
 │   │   ├── my/             # 当前用户相关（通知、权限）
 │   │   └── internal/       # 内部 cron 接口（通知触发）
-│   ├── production/[id]/    # 剧目子页面（剧本、场景、Cue、Asset 等）
+│   ├── production/[id]/    # 剧目子页面（剧本、段落、Cue、Asset 等）
 │   ├── my/                 # 个人页面（通知、权限、周 call、日 call）
 │   └── login/              # 登录页
 │
