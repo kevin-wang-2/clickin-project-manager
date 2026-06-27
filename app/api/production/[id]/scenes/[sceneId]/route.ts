@@ -7,7 +7,8 @@ import {
 import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 import { FIXED_INITIAL_CHAPTER_BLOCK_ID } from "@/lib/script-fixed-markers";
-import { isMarkerBlock } from "@/lib/script-marker-blocks";
+import { isMarkerBlock, shouldInsertEmptyBlockAfterMarker } from "@/lib/script-marker-blocks";
+import type { Block } from "@/lib/script-types";
 
 async function getCtx(req: NextRequest, productionId: string) {
   const session = getSession(req.cookies);
@@ -106,14 +107,50 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/producti
     sceneId,
     ...result.state.scenes.filter((scene) => scene.parentId === sceneId).map((scene) => scene.id),
   ]);
-  const blockOps = result.state.blocks
-    .filter((block) => (
-      isMarkerBlock(block) &&
-      block.type !== "rehearsal_marker" &&
-      block.sceneId !== null &&
-      removedSceneIds.has(block.sceneId)
-    ))
-    .map((block) => ({ op: "delete" as const, id: block.id }));
+  const deletedMarkerIds = new Set<string>();
+  const markersToRepair = new Set<string>();
+  const blocks = result.state.blocks;
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index];
+    if (
+      !isMarkerBlock(block) ||
+      block.type === "rehearsal_marker" ||
+      block.sceneId === null ||
+      !removedSceneIds.has(block.sceneId)
+    ) {
+      continue;
+    }
+    deletedMarkerIds.add(block.id);
+    const previous = blocks[index - 1];
+    if (previous && isMarkerBlock(previous)) markersToRepair.add(previous.id);
+  }
+  const blockOps: Array<{ op: "delete"; id: string } | { op: "insert"; block: Block; afterId: string | null }> = [
+    ...[...deletedMarkerIds].map((id) => ({ op: "delete" as const, id })),
+  ];
+  if (markersToRepair.size > 0) {
+    const remainingBlocks = blocks.filter((block) => !deletedMarkerIds.has(block.id));
+    const markerIndexById = new Map(remainingBlocks.map((block, index) => [block.id, index]));
+    const markerIndexes = [...markersToRepair]
+      .map((id) => markerIndexById.get(id) ?? -1)
+      .filter((index) => index >= 0)
+      .sort((a, b) => b - a);
+    for (const markerIndex of markerIndexes) {
+      if (!shouldInsertEmptyBlockAfterMarker(remainingBlocks, markerIndex)) continue;
+      const emptyBlock: Block = {
+        id: crypto.randomUUID(),
+        type: "dialogue",
+        content: "",
+        characterIds: [],
+        characterAnnotations: {},
+        lyric: false,
+        sceneId: null,
+        rehearsalMark: null,
+        forceShowCharacterName: false,
+      };
+      blockOps.push({ op: "insert", block: emptyBlock, afterId: remainingBlocks[markerIndex].id });
+      remainingBlocks.splice(markerIndex + 1, 0, emptyBlock);
+    }
+  }
 
   await applyPatchToDB(id, versionId, {
     clientSeq: 0,

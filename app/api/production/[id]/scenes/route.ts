@@ -8,6 +8,7 @@ import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
 import { withGeneratedSceneNumbers } from "@/lib/script-generated-labels";
 import type { Block, BlockType } from "@/lib/script-types";
+import { shouldInsertEmptyBlockAfterMarker } from "@/lib/script-marker-blocks";
 
 function uid(prefix = "b") {
   return `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -34,20 +35,6 @@ function makeMarkerBlock(type: Extract<BlockType, "chapter_marker" | "scene_mark
     sceneId: markerId,
     markerMeta: { name, number, parentMarkerId: parentId },
   };
-}
-
-function shouldInsertEmptyBlockAfterMarker(blocks: Block[], markerIndex: number): boolean {
-  const marker = blocks[markerIndex];
-  if (!marker || (marker.type !== "chapter_marker" && marker.type !== "scene_marker")) return false;
-
-  for (let cursor = markerIndex + 1; cursor < blocks.length; cursor++) {
-    const next = blocks[cursor];
-    if (next.type === "chapter_marker") break;
-    if (marker.type === "chapter_marker" && next.type === "scene_marker") return false;
-    if (next.type === "scene_marker") break;
-    if (next.type === "dialogue" || next.type === "stage") return false;
-  }
-  return true;
 }
 
 async function getCtx(req: NextRequest, productionId: string) {
@@ -145,7 +132,6 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   const numberedScenes = withGeneratedSceneNumbers(scenes);
   const numberedNewScene = numberedScenes.find((scene) => scene.id === newScene.id) ?? newScene;
   const marker = makeMarkerBlock(parentId ? "scene_marker" : "chapter_marker", newScene.id, name, numberedNewScene.number, parentId);
-  const emptyBlock = makeBlock();
   const targetSceneIndex = numberedScenes.findIndex((scene) => scene.id === newScene.id);
   const insertBeforeScene = numberedScenes.slice(targetSceneIndex + 1).find((scene) => (
     parentId ? scene.parentId === parentId || scene.parentId === null : scene.parentId === null
@@ -166,14 +152,23 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   const afterId = insertBeforeIndex > 0 ? blocks[insertBeforeIndex - 1]?.id ?? null : null;
   const nextBlocks = [...blocks];
   nextBlocks.splice(insertBeforeIndex, 0, marker);
-  const needsEmptyBlock = shouldInsertEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex);
+  const needsEmptyBlockBeforeMarker = insertBeforeIndex > 0 && shouldInsertEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex - 1);
+  const needsEmptyBlockAfterMarker = shouldInsertEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex);
+  const blockOps: Array<{ op: "insert"; block: Block; afterId: string | null }> = [];
+  let markerAfterId = afterId;
+  if (needsEmptyBlockBeforeMarker) {
+    const emptyBlock = makeBlock();
+    blockOps.push({ op: "insert", block: emptyBlock, afterId });
+    markerAfterId = emptyBlock.id;
+  }
+  blockOps.push({ op: "insert", block: marker, afterId: markerAfterId });
+  if (needsEmptyBlockAfterMarker) {
+    blockOps.push({ op: "insert", block: makeBlock(), afterId: marker.id });
+  }
 
   await applyPatchToDB(id, versionId, {
     clientSeq: 0,
-    blockOps: [
-      { op: "insert", block: marker, afterId },
-      ...(needsEmptyBlock ? [{ op: "insert" as const, block: emptyBlock, afterId: marker.id }] : []),
-    ],
+    blockOps,
     charOps: [],
     sceneOps: [],
   });
