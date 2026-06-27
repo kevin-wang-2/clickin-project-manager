@@ -57,6 +57,14 @@ const SCRIPT_SCENE_DETAIL_RAIL_MIN_WIDTH_REM = 18;
 const SCRIPT_SCENE_DETAIL_MODE_BUTTON_EXTRA_INSET_REM = 0.25;
 const SCRIPT_SCENE_DETAIL_CAPTION_BG_HEIGHT_REM = 2.5;
 const SCRIPT_TOC_ACTIVE_SCENE_TOP_ANCHOR_PX = 80;
+const REHEARSAL_MARKER_ROW_BASE_HEIGHT_REM = 1.75;
+const REHEARSAL_MARKER_ROW_HEIGHT_SCALE = 0;
+const REHEARSAL_MARKER_ROW_MIN_HEIGHT_PX = 1;
+const REHEARSAL_MARKER_FLOAT_LEFT_OFFSET_REM = -0.75;
+const MARKER_CONTROL_DELETE_LEFT_PX = 0;
+const MARKER_CONTROL_BAR_LEFT_PX = 12;
+const MARKER_CONTROL_TRIANGLE_LEFT_PX = MARKER_CONTROL_BAR_LEFT_PX * 2 - MARKER_CONTROL_DELETE_LEFT_PX + 1;
+const MARKER_CONTROL_TRIANGLE_TOP_OFFSET_PX = 0.6;
 let scriptTocMeasureElement: HTMLSpanElement | null = null;
 let scriptTocMeasureCache: {
   scenes: Scene[];
@@ -1620,12 +1628,18 @@ function ScriptMarkerRow({
   onDragOver,
   onDrop,
   onSelect,
+  canAddChapterScene,
+  canAddRehearsal,
+  onAddChapterBefore,
+  onAddSceneBefore,
+  onAddRehearsalBefore,
+  onConvertToChapter,
+  onConvertToScene,
   onDeleteConfirmChange,
   onSceneNameChange,
   lineIndexWidth,
   isFixed = false,
   isRecentlyMoved = false,
-  isMoveGlowFading = false,
   isTocHighlighted = false,
 }: {
   node: ScriptMarkerNode;
@@ -1640,18 +1654,30 @@ function ScriptMarkerRow({
   onDragOver: (e: DragEvent<HTMLDivElement>) => void;
   onDrop: (e: DragEvent<HTMLDivElement>) => void;
   onSelect: () => void;
+  canAddChapterScene: boolean;
+  canAddRehearsal: boolean;
+  onAddChapterBefore: () => void;
+  onAddSceneBefore: () => void;
+  onAddRehearsalBefore: () => void;
+  onConvertToChapter?: () => void;
+  onConvertToScene?: () => void;
   onDeleteConfirmChange?: (confirming: boolean) => void;
   onSceneNameChange?: (id: string, name: string) => void;
   lineIndexWidth?: string;
   isFixed?: boolean;
   isRecentlyMoved?: boolean;
-  isMoveGlowFading?: boolean;
   isTocHighlighted?: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isRehearsal = node.kind === "rehearsal";
   const markerRootStyle: React.CSSProperties | undefined = lineIndexWidth
     ? { paddingLeft: `calc(${lineIndexWidth} + ${LINE_INDEX_GUTTER_OFFSET_REM}rem)` }
+    : undefined;
+  const rehearsalMarkerStyle: React.CSSProperties | undefined = isRehearsal
+    ? { height: `max(${REHEARSAL_MARKER_ROW_MIN_HEIGHT_PX}px, ${REHEARSAL_MARKER_ROW_BASE_HEIGHT_REM * REHEARSAL_MARKER_ROW_HEIGHT_SCALE}rem)` }
+    : undefined;
+  const rehearsalFloatStyle: React.CSSProperties | undefined = isRehearsal
+    ? { left: `calc(1.5rem + ${REHEARSAL_MARKER_FLOAT_LEFT_OFFSET_REM}rem)` }
     : undefined;
   const title = isRehearsal
     ? `排练记号 ${node.mark}`
@@ -1663,17 +1689,36 @@ function ScriptMarkerRow({
         ? "确认删除此段落标记？"
         : "确认删除此排练记号？";
   const markerMovedGlowClass = isRecentlyMoved ? "script-block-moved-glow" : "";
-  const markerGlowFadeClass = !isSelected && isMoveGlowFading ? "script-block-glow-fade" : "";
-  const markerTocGlowClass = !isRecentlyMoved && !isMoveGlowFading && isTocHighlighted ? "script-toc-marker-glow" : "";
-  const markerNeedsGlowEndColor = isMoveGlowFading || isTocHighlighted;
-  const markerGlowEndColor = markerNeedsGlowEndColor
+  const markerTocGlowClass = !isRehearsal && !isRecentlyMoved && isTocHighlighted ? "script-toc-marker-glow" : "";
+  const markerGlowEndColor = !isRehearsal && isTocHighlighted
     ? confirmDelete ? "#fee2e2" : isSelected ? "#eef3fa" : "#ffffff"
     : undefined;
+  const convertToChapter = node.kind === "scene" || node.kind === "rehearsal" ? onConvertToChapter : undefined;
+  const convertToScene = node.kind === "chapter" || node.kind === "rehearsal" ? onConvertToScene : undefined;
+  const canShowBoundaryMenu = !isFixed && (
+    canAddChapterScene ||
+    canAddRehearsal ||
+    !!convertToChapter ||
+    !!convertToScene
+  );
+  const boundaryMenuControl = canShowBoundaryMenu ? (
+    <RehearsalMarkInput
+      variant="marker-control"
+      canAddChapterScene={canAddChapterScene}
+      canAddRehearsal={canAddRehearsal}
+      onAddChapterBefore={onAddChapterBefore}
+      onAddSceneBefore={onAddSceneBefore}
+      onAddRehearsalBefore={onAddRehearsalBefore}
+      onConvertToChapter={convertToChapter}
+      onConvertToScene={convertToScene}
+    />
+  ) : null;
   const markerRootCombinedStyle: React.CSSProperties | undefined = (
-    markerRootStyle || markerNeedsGlowEndColor
+    markerRootStyle || rehearsalMarkerStyle || markerGlowEndColor
       ? ({
           ...markerRootStyle,
-          ...(markerNeedsGlowEndColor ? { "--script-block-glow-fade-end": markerGlowEndColor } : {}),
+          ...rehearsalMarkerStyle,
+          ...(markerGlowEndColor ? { "--script-block-glow-fade-end": markerGlowEndColor } : {}),
         } as React.CSSProperties)
       : undefined
   );
@@ -1685,6 +1730,8 @@ function ScriptMarkerRow({
       title={title}
       onClick={(e) => {
         if (isScriptDragging) return;
+        if (isRehearsal) return;
+        if (!canEdit) return;
         if ((e.target as HTMLElement | null)?.closest("[data-script-marker-title='true']")) return;
         onSelect();
       }}
@@ -1692,8 +1739,10 @@ function ScriptMarkerRow({
       onDrop={onDrop}
       style={markerRootCombinedStyle}
       className={`group/marker relative select-none text-left transition-colors ${
-        confirmDelete ? "bg-red-100" : isSelected ? "bg-[#eef3fa]" : "hover:bg-zinc-50/70"
-      } ${markerMovedGlowClass} ${markerGlowFadeClass} ${markerTocGlowClass} px-6 ${isRehearsal ? "h-7" : ""}`}
+        isRehearsal
+          ? ""
+          : confirmDelete ? "bg-red-100" : isSelected ? "bg-[#eef3fa]" : "hover:bg-zinc-50/70"
+      } ${markerMovedGlowClass} ${markerTocGlowClass} px-6 ${isRehearsal ? "overflow-visible" : ""}`}
     >
       {dragTarget && (
         <div
@@ -1703,9 +1752,9 @@ function ScriptMarkerRow({
           style={{ borderColor: "#91a8ca" }}
         />
       )}
-      {canEdit && !isFixed && (
-        <div className="absolute left-0 top-1 bottom-1 z-20 w-8">
-          {confirmDelete ? (
+      {!isFixed && !isRehearsal && (canEdit || boundaryMenuControl) && (
+        <div className="absolute left-0 top-1 bottom-1 z-20 w-12">
+          {canEdit && confirmDelete ? (
             <span
               className="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 translate-x-8 items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm"
               data-script-confirmation="true"
@@ -1724,13 +1773,16 @@ function ScriptMarkerRow({
               </button>
               <button
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setConfirmDelete(false)}
+                onClick={() => {
+                  setConfirmDelete(false);
+                  onDeleteConfirmChange?.(false);
+                }}
                 className="shrink-0 whitespace-nowrap text-[10px] text-zinc-400 hover:text-zinc-600"
               >
                 取消
               </button>
             </span>
-          ) : (
+          ) : canEdit ? (
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
@@ -1739,17 +1791,63 @@ function ScriptMarkerRow({
                 setConfirmDelete(true);
                 onDeleteConfirmChange?.(true);
               }}
-              className="absolute left-0 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-[12px] leading-none text-zinc-300 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover/marker:opacity-100"
+              style={{ left: MARKER_CONTROL_DELETE_LEFT_PX }}
+              className="absolute top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded text-[12px] leading-none text-zinc-300 opacity-0 transition-all hover:bg-red-100 hover:text-red-500 group-hover/marker:opacity-100"
               title="删除此标记"
               aria-label="删除此标记"
             >
               ×
             </button>
+          ) : null}
+          {canEdit && (
+            <button
+              type="button"
+              draggable={!isReorderLocked}
+              disabled={isReorderLocked}
+              data-script-block-bar="true"
+              data-script-marker-bar="true"
+              onDragStart={onDragStart}
+              onDragEnd={onDragEnd}
+              onMouseDown={(e) => {
+                if (e.shiftKey) e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={onSelect}
+              style={{ left: MARKER_CONTROL_BAR_LEFT_PX }}
+              className={`absolute top-1/2 h-[max(1.25rem,calc(100%-0.25rem))] w-4 -translate-y-1/2 select-none rounded opacity-0 outline-none transition-all focus:outline-none focus-visible:outline-none group-hover/marker:opacity-100 ${
+                isReorderLocked
+                  ? "cursor-not-allowed text-zinc-200 opacity-40"
+                  : `cursor-grab hover:bg-[#dbe5f3] hover:text-[#91a8ca] active:cursor-grabbing ${
+                      isSelected ? "bg-[#dbe5f3] text-[#91a8ca] opacity-100" : "text-zinc-200"
+                    }`
+              }`}
+              title="拖动调整标记位置"
+              aria-label="拖动调整标记位置"
+            >
+              <span className="pointer-events-none absolute bottom-1 left-1/2 top-1 w-0.5 -translate-x-1/2 rounded bg-current" />
+            </button>
           )}
+          {boundaryMenuControl && (
+            <span
+              className="absolute top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover/marker:opacity-100"
+              style={{
+                left: MARKER_CONTROL_TRIANGLE_LEFT_PX,
+                marginTop: MARKER_CONTROL_TRIANGLE_TOP_OFFSET_PX,
+              }}
+            >
+              {boundaryMenuControl}
+            </span>
+          )}
+        </div>
+      )}
+      {isRehearsal ? (
+        <div
+          className="absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-1"
+          style={rehearsalFloatStyle}
+        >
           <button
             type="button"
-            draggable={!isReorderLocked}
-            disabled={isReorderLocked}
+            draggable={canEdit && !isFixed && !isReorderLocked}
             data-script-block-bar="true"
             data-script-marker-bar="true"
             onDragStart={onDragStart}
@@ -1758,26 +1856,87 @@ function ScriptMarkerRow({
               if (e.shiftKey) e.preventDefault();
               e.stopPropagation();
             }}
-            onClick={onSelect}
-            className={`absolute left-4 top-1/2 h-[max(1.25rem,calc(100%-0.25rem))] w-4 -translate-y-1/2 select-none rounded opacity-0 outline-none transition-all focus:outline-none focus-visible:outline-none group-hover/marker:opacity-100 ${
-              isReorderLocked
-                ? "cursor-not-allowed text-zinc-200 opacity-40"
-                : `cursor-grab hover:bg-[#dbe5f3] hover:text-[#91a8ca] active:cursor-grabbing ${
-                    isSelected ? "bg-[#dbe5f3] text-[#91a8ca] opacity-100" : "text-zinc-200"
-                  }`
+            onClick={(e) => {
+              e.stopPropagation();
+              if (isScriptDragging) return;
+              if (!canEdit) return;
+              onSelect();
+            }}
+            className={`inline-flex h-5 min-w-6 items-center justify-center rounded px-2 text-[10px] font-bold tracking-wider ${confirmDelete ? "transition-none" : "transition-all"} ${
+              confirmDelete
+                ? "bg-red-100 text-red-600 ring-1 ring-red-300"
+                : isSelected ? "bg-[#eef3fa] text-[#637ca1] ring-1 ring-[#91a8ca]" : "bg-zinc-100 text-zinc-500"
+            } ${
+              canEdit && !isFixed && !isReorderLocked
+                ? confirmDelete
+                  ? "cursor-grab hover:bg-red-100 hover:text-red-700 active:cursor-grabbing"
+                  : "cursor-grab hover:bg-[#dbe5f3] hover:text-[#637ca1] active:cursor-grabbing"
+                : "cursor-default"
             }`}
-            title="拖动调整标记位置"
-            aria-label="拖动调整标记位置"
+            title="拖动调整排练记号位置"
+            aria-label={`排练记号 ${node.mark}`}
           >
-            <span className="pointer-events-none absolute bottom-1 left-1/2 top-1 w-0.5 -translate-x-1/2 rounded bg-current" />
-          </button>
-        </div>
-      )}
-      {isRehearsal ? (
-        <div className="grid h-7 min-w-0 grid-cols-[7.5rem_1rem_minmax(0,1fr)] items-center gap-x-2">
-          <span className="col-start-1 inline-flex h-5 min-w-6 items-center justify-center justify-self-start rounded bg-zinc-100 px-2 text-[10px] font-bold tracking-wider text-zinc-500">
             {node.mark}
-          </span>
+          </button>
+          {canEdit && !isFixed && confirmDelete ? (
+            <span
+              className="flex items-center gap-2 rounded bg-white/90 px-1.5 py-0.5 shadow-sm"
+              data-script-confirmation="true"
+            >
+              <span className="whitespace-nowrap text-[10px] text-zinc-400">{deleteConfirmText}</span>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDelete(false);
+                  onRemove();
+                }}
+                className="shrink-0 whitespace-nowrap text-[10px] text-red-500 hover:text-red-700"
+              >
+                确认
+              </button>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDelete(false);
+                }}
+                className="shrink-0 whitespace-nowrap text-[10px] text-zinc-400 hover:text-zinc-600"
+              >
+                取消
+              </button>
+            </span>
+          ) : canEdit && !isFixed ? (
+            <button
+              type="button"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (isScriptDragging) return;
+                onSelect();
+                setConfirmDelete(true);
+              }}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+              className={`flex h-4 w-4 items-center justify-center rounded text-[12px] leading-none text-zinc-300 transition-all hover:bg-red-100 hover:text-red-500 ${
+                isSelected ? "opacity-100" : "opacity-0 group-hover/marker:opacity-100"
+              }`}
+              title="删除此排练记号"
+              aria-label="删除此排练记号"
+            >
+              ×
+            </button>
+          ) : null}
+          {!confirmDelete && boundaryMenuControl ? (
+            <span className="flex h-4 items-center opacity-0 transition-opacity group-hover/marker:opacity-100">
+              {boundaryMenuControl}
+            </span>
+          ) : null}
         </div>
       ) : (
         <div className="grid min-w-0 grid-cols-[7.5rem_1rem_minmax(0,1fr)] gap-x-2">
@@ -1800,12 +1959,16 @@ function BoundaryInsertMenu({
   onAddChapter,
   onAddScene,
   onAddRehearsal,
+  onConvertToChapter,
+  onConvertToScene,
 }: {
   canAddChapterScene: boolean;
   canAddRehearsal: boolean;
   onAddChapter: () => void;
   onAddScene: () => void;
   onAddRehearsal: () => void;
+  onConvertToChapter?: () => void;
+  onConvertToScene?: () => void;
 }) {
   const actions: Array<[string, () => void]> = [
     ...(canAddChapterScene ? [
@@ -1814,23 +1977,39 @@ function BoundaryInsertMenu({
     ] : []),
     ...(canAddRehearsal ? [["添加新排练记号", onAddRehearsal] as [string, () => void]] : []),
   ];
+  const conversionActions: Array<[string, () => void]> = [
+    ...(onConvertToChapter ? [["转为章节", onConvertToChapter] as [string, () => void]] : []),
+    ...(onConvertToScene ? [["转为段落", onConvertToScene] as [string, () => void]] : []),
+  ];
+  const renderAction = ([label, handler]: [string, () => void]) => (
+    <button
+      key={label}
+      type="button"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        handler();
+      }}
+      className="block w-full px-3 py-1.5 text-left text-xs text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="absolute left-0 top-full z-50 mt-1 w-36 rounded-lg border border-zinc-100 bg-white py-1 text-left shadow-xl">
-      <div className="px-3 py-1 text-[10px] font-semibold tracking-wide text-zinc-400">在块前</div>
-      {actions.map(([label, handler]) => (
-        <button
-          key={label}
-          type="button"
-          onMouseDown={(e) => {
-            e.preventDefault();
-            handler();
-          }}
-          className="block w-full px-3 py-1.5 text-left text-xs text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
-        >
-          {label}
-        </button>
-      ))}
+      {actions.length > 0 && (
+        <>
+          <div className="px-3 py-1 text-[10px] font-semibold tracking-wide text-zinc-400">在块前</div>
+          {actions.map(renderAction)}
+        </>
+      )}
+      {conversionActions.length > 0 && (
+        <>
+          {actions.length > 0 && <div className="my-1 h-px bg-zinc-100" />}
+          <div className="px-3 py-1 text-[10px] font-semibold tracking-wide text-zinc-400">转换</div>
+          {conversionActions.map(renderAction)}
+        </>
+      )}
     </div>
   );
 }
@@ -1851,48 +2030,58 @@ function SceneLabel({ scene, focused = false }: { scene: Scene; focused?: boolea
 // ─── Per-block rehearsal mark ──────────────────────────────────────────────────
 
 function RehearsalMarkInput({
-  mark,
+  variant = "script-block",
   canAddChapterScene,
   canAddRehearsal,
   onAddChapterBefore,
   onAddSceneBefore,
   onAddRehearsalBefore,
+  onConvertToChapter,
+  onConvertToScene,
 }: {
-  mark: string | null;
+  variant?: "script-block" | "marker-control";
   canAddChapterScene: boolean;
   canAddRehearsal: boolean;
   onAddChapterBefore: () => void;
   onAddSceneBefore: () => void;
   onAddRehearsalBefore: () => void;
+  onConvertToChapter?: () => void;
+  onConvertToScene?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
+    if (!open) return;
     const handler = (e: MouseEvent) => {
       if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  }, [open]);
 
   const closeAfter = (fn: () => void) => {
     fn();
     setOpen(false);
   };
+  const triggerLayoutClass = variant === "marker-control"
+    ? "flex h-4 w-4 items-center justify-center p-0"
+    : "px-0.5 py-0";
 
   return (
-    <span ref={wrapRef} className={`relative flex items-start gap-1 ${open ? "z-50" : ""}`}>
+    <span
+      ref={wrapRef}
+      className={`relative flex items-start gap-1 ${open ? "z-50" : ""}`}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
       <button
         type="button"
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => setOpen((value) => !value)}
         title="添加章节/段落/排练记号"
         data-rehearsal-triangle="true"
-        className={`rounded px-0.5 py-0 text-[8px] font-bold leading-none tracking-wide transition-colors ${
-          mark
-            ? "text-zinc-500 hover:text-zinc-700"
-            : "text-zinc-200 hover:text-zinc-400"
-        }`}
+        className={`rounded ${triggerLayoutClass} text-[8px] font-bold leading-none tracking-wide text-zinc-300 transition-colors hover:text-zinc-500`}
       >
         ▶
       </button>
@@ -1903,6 +2092,8 @@ function RehearsalMarkInput({
           onAddChapter={() => closeAfter(onAddChapterBefore)}
           onAddScene={() => closeAfter(onAddSceneBefore)}
           onAddRehearsal={() => closeAfter(onAddRehearsalBefore)}
+          onConvertToChapter={onConvertToChapter ? () => closeAfter(onConvertToChapter) : undefined}
+          onConvertToScene={onConvertToScene ? () => closeAfter(onConvertToScene) : undefined}
         />
       )}
     </span>
@@ -4138,6 +4329,84 @@ function normalizeScriptBlockStream(blocks: Block[]): Block[] {
   return withGeneratedMarkerRehearsalMarks(blocks);
 }
 
+function withLeadingRehearsalMarkersForMarkedSegments(blocks: Block[]): Block[] {
+  let needsInsertion = false;
+  for (let index = 0; index < blocks.length;) {
+    const boundary = blocks[index];
+    if (boundary.type !== "chapter_marker" && boundary.type !== "scene_marker") {
+      index++;
+      continue;
+    }
+
+    let nextBoundaryIndex = blocks.length;
+    let hasRehearsalInSegment = false;
+    for (let cursor = index + 1; cursor < blocks.length; cursor++) {
+      const candidate = blocks[cursor];
+      if (candidate.type === "chapter_marker" || candidate.type === "scene_marker") {
+        nextBoundaryIndex = cursor;
+        break;
+      }
+      if (candidate.type === "rehearsal_marker") hasRehearsalInSegment = true;
+    }
+
+    if (hasRehearsalInSegment && blocks[index + 1]?.type !== "rehearsal_marker") {
+      needsInsertion = true;
+      break;
+    }
+    index = nextBoundaryIndex;
+  }
+
+  if (!needsInsertion) return blocks;
+
+  let index = 0;
+  const next: Block[] = [];
+  while (index < blocks.length) {
+    const boundary = blocks[index];
+    if (boundary.type !== "chapter_marker" && boundary.type !== "scene_marker") {
+      next.push(boundary);
+      index++;
+      continue;
+    }
+
+    let nextBoundaryIndex = blocks.length;
+    let hasRehearsalInSegment = false;
+    for (let cursor = index + 1; cursor < blocks.length; cursor++) {
+      const candidate = blocks[cursor];
+      if (candidate.type === "chapter_marker" || candidate.type === "scene_marker") {
+        nextBoundaryIndex = cursor;
+        break;
+      }
+      if (candidate.type === "rehearsal_marker") hasRehearsalInSegment = true;
+    }
+
+    next.push(boundary);
+    if (hasRehearsalInSegment && blocks[index + 1]?.type !== "rehearsal_marker") {
+      next.push(makeMarkerBlock("rehearsal_marker", { rehearsalMark: `__auto_rehearsal_${uid()}` }));
+    }
+    next.push(...blocks.slice(index + 1, nextBoundaryIndex));
+    index = nextBoundaryIndex;
+  }
+
+  return normalizeScriptBlockStream(next);
+}
+
+function rehearsalMarkerDeleteIds(blocks: Block[], index: number): Set<string> {
+  const block = blocks[index];
+  if (block?.type !== "rehearsal_marker") return new Set(block ? [block.id] : []);
+  const previousBlock = blocks[index - 1] ?? null;
+  if (previousBlock?.type !== "chapter_marker" && previousBlock?.type !== "scene_marker") {
+    return new Set([block.id]);
+  }
+
+  for (let cursor = index + 1; cursor < blocks.length; cursor++) {
+    const candidate = blocks[cursor];
+    if (candidate.type === "chapter_marker" || candidate.type === "scene_marker") break;
+    if (candidate.type === "rehearsal_marker") return new Set();
+  }
+
+  return new Set([block.id]);
+}
+
 function sameBlocks(a: Block[], b: Block[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((block, index) => {
@@ -4248,6 +4517,12 @@ function normalizeScriptMarkerInvariants(blocks: Block[], scenes: Scene[]): { bl
     }
 
     scanIndex = nextChapterIndex;
+  }
+
+  const rehearsalNormalizedBlocks = withLeadingRehearsalMarkersForMarkedSegments(nextBlocks);
+  if (rehearsalNormalizedBlocks !== nextBlocks) {
+    nextBlocks = rehearsalNormalizedBlocks;
+    changed = true;
   }
 
   const sceneIds = new Set(nextScenes.map((scene) => scene.id));
@@ -4695,7 +4970,6 @@ function ScriptBlock({
   isDeleteConfirmHighlighted = false,
   isCharacterFocusHighlighted = false,
   isRecentlyMoved = false,
-  isMoveGlowFading = false,
   deleteConfirmToken,
   selectedCount = 0,
   dismissToken = 0,
@@ -4773,7 +5047,6 @@ function ScriptBlock({
   isDeleteConfirmHighlighted?: boolean;
   isCharacterFocusHighlighted?: boolean;
   isRecentlyMoved?: boolean;
-  isMoveGlowFading?: boolean;
   deleteConfirmToken?: number;
   selectedCount?: number;
   dismissToken?: number;
@@ -5090,15 +5363,6 @@ function ScriptBlock({
         ? "bg-zinc-50/60"
         : "";
   const movedGlowClass = isRecentlyMoved ? "script-block-moved-glow" : "";
-  const glowFadeClass = !isSelected && isMoveGlowFading ? "script-block-glow-fade" : "";
-  const glowFadeEndColor = isMoveGlowFading
-    ? isDeleteConfirmHighlighted ? "#fee2e2" :
-      isFocused && !hasSideVisibleHighlight ? "rgba(244, 244, 245, 0.7)" :
-      hasExpandedSidePanel ? "rgba(16, 185, 129, 0.1)" :
-      isCharacterFocusHighlighted ? "#faf5ff" :
-      (index ?? 0) % 2 === 1 ? "rgba(250, 250, 250, 0.6)" :
-      "#ffffff"
-    : undefined;
   const compactDeleteStyle: React.CSSProperties | undefined = compactControlLayout?.deleteLeft !== null && compactControlLayout?.deleteLeft !== undefined
     ? { left: compactControlLayout.deleteLeft }
     : undefined;
@@ -5158,11 +5422,10 @@ function ScriptBlock({
       }
     : undefined;
   const combinedBlockRootStyle: React.CSSProperties | undefined =
-    blockRootStyle || partialFocusStyle || isMoveGlowFading
+    blockRootStyle || partialFocusStyle
       ? ({
           ...blockRootStyle,
           ...partialFocusStyle,
-          ...(isMoveGlowFading ? { "--script-block-glow-fade-end": glowFadeEndColor } : {}),
         } as React.CSSProperties)
       : undefined;
   const commentBlockCaption = buildCommentBlockCaption(block, characters, index ?? 0);
@@ -5231,7 +5494,7 @@ function ScriptBlock({
       onDrop={onDropBlock}
       onMouseLeave={resetCompactControlHover}
       style={combinedBlockRootStyle}
-      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass} ${movedGlowClass} ${glowFadeClass}`}
+      className={`group relative px-6 py-0 text-center transition-colors ${searchRingClass} ${blockBgClass} ${movedGlowClass}`}
     >
       {dragTarget && (
         <div
@@ -5261,7 +5524,6 @@ function ScriptBlock({
               className={`relative top-[1px] transition-opacity ${isMarkStart && block.rehearsalMark && showRehearsalMark ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
             >
               <RehearsalMarkInput
-                mark={block.rehearsalMark}
                 canAddChapterScene={canEditMetadata}
                 canAddRehearsal={canEditRehearsalMark}
                 onAddChapterBefore={onAddChapterBefore}
@@ -6185,7 +6447,6 @@ export default function ScriptEditor({
   const rangeSelectionActiveRef = useRef(false);
   const [shiftKeyDown, setShiftKeyDown] = useState(false);
   const [recentlyMovedBlockIds, setRecentlyMovedBlockIds] = useState<Set<string>>(() => new Set());
-  const [moveGlowFadingBlockIds, setMoveGlowFadingBlockIds] = useState<Set<string>>(() => new Set());
   const [tocHighlightedMarkerIds, setTocHighlightedMarkerIds] = useState<Set<string>>(() => new Set());
   const [deleteConfirmationRequest, setDeleteConfirmationRequest] = useState<{ anchorId: string; token: number } | null>(null);
   const [deleteConfirmingBlockIds, setDeleteConfirmingBlockIds] = useState<Set<string>>(() => new Set());
@@ -6204,7 +6465,9 @@ export default function ScriptEditor({
   const [detailBlockVisibility, setDetailBlockVisibility] = useState({ selected: false, focused: false });
   const [charEditTokens, setCharEditTokens] = useState<Record<string, number>>({});
   const lineIndexMeasureRef = useRef<HTMLSpanElement | null>(null);
+  const lineIndexMinMeasureRef = useRef<HTMLSpanElement | null>(null);
   const [lineIndexWidth, setLineIndexWidth] = useState(0);
+  const [lineIndexMinWidth, setLineIndexMinWidth] = useState(0);
 
   // ── Block tags ───────────────────────────────────────────────────────────────
   const [tagGroups, setTagGroups] = useState<TagGroup[]>([]);
@@ -6529,21 +6792,29 @@ export default function ScriptEditor({
   useLayoutEffect(() => {
     if (!display.lineNumbers) {
       setLineIndexWidth(0);
+      setLineIndexMinWidth(0);
       return;
     }
     const el = lineIndexMeasureRef.current;
-    if (!el) return;
+    const minEl = lineIndexMinMeasureRef.current;
+    if (!el || !minEl) return;
     const measure = () => {
       const width = Math.ceil(el.getBoundingClientRect().width);
+      const minWidth = Math.ceil(minEl.getBoundingClientRect().width);
       setLineIndexWidth((prev) => prev === width ? prev : width);
+      setLineIndexMinWidth((prev) => prev === minWidth ? prev : minWidth);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
+    observer.observe(minEl);
     return () => observer.disconnect();
   }, [display.lineNumbers, maxLineIndexText]);
   const lineIndexWidthStyle = display.lineNumbers && lineIndexWidth > 0
     ? `${lineIndexWidth}px`
+    : undefined;
+  const markerLineIndexWidthStyle = display.lineNumbers && (lineIndexWidth > 0 || lineIndexMinWidth > 0)
+    ? `${Math.max(lineIndexWidth, lineIndexMinWidth)}px`
     : undefined;
   const toggleDisplay = useCallback((key: keyof DisplaySettings) => {
     setDisplay(prev => {
@@ -6578,7 +6849,6 @@ export default function ScriptEditor({
     }
     suppressProgrammaticScrollRef.current = false;
     clearTimeoutMap(movedHighlightTimersRef.current);
-    clearTimeoutMap(movedFadeTimersRef.current);
     clearTimeoutMap(tocMarkerGlowTimersRef.current);
     if (presenceTimerRef.current !== null) {
       clearTimeout(presenceTimerRef.current);
@@ -6619,7 +6889,6 @@ export default function ScriptEditor({
   const reorderNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectionChangeNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const movedHighlightTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const movedFadeTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const tocMarkerGlowTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const suppressProgrammaticScrollRef = useRef(false);
   const programmaticScrollFrameRef = useRef<number | null>(null);
@@ -6660,7 +6929,6 @@ export default function ScriptEditor({
     if (reorderNoticeTimer.current !== null) clearTimeout(reorderNoticeTimer.current);
     if (selectionChangeNoticeTimer.current !== null) clearTimeout(selectionChangeNoticeTimer.current);
     clearTimeoutMap(movedHighlightTimersRef.current);
-    clearTimeoutMap(movedFadeTimersRef.current);
     clearTimeoutMap(tocMarkerGlowTimersRef.current);
   }, []);
 
@@ -6810,21 +7078,6 @@ export default function ScriptEditor({
     if (nextIds.length === 0) return;
     const idsToStart = nextIds.filter((id) => !movedHighlightTimersRef.current.has(id));
     if (idsToStart.length === 0) return;
-    idsToStart.forEach((id) => {
-      const fadeTimer = movedFadeTimersRef.current.get(id);
-      if (fadeTimer) {
-        clearTimeout(fadeTimer);
-        movedFadeTimersRef.current.delete(id);
-      }
-    });
-    setMoveGlowFadingBlockIds((current) => {
-      let changed = false;
-      const next = new Set(current);
-      idsToStart.forEach((id) => {
-        if (next.delete(id)) changed = true;
-      });
-      return changed ? next : current;
-    });
     setRecentlyMovedBlockIds((current) => {
       const next = new Set(current);
       idsToStart.forEach((id) => next.add(id));
@@ -6839,22 +7092,6 @@ export default function ScriptEditor({
           next.delete(id);
           return next;
         });
-        setMoveGlowFadingBlockIds((current) => {
-          if (current.has(id)) return current;
-          const next = new Set(current);
-          next.add(id);
-          return next;
-        });
-        const fadeTimer = setTimeout(() => {
-          movedFadeTimersRef.current.delete(id);
-          setMoveGlowFadingBlockIds((current) => {
-            if (!current.has(id)) return current;
-            const next = new Set(current);
-            next.delete(id);
-            return next;
-          });
-        }, 500);
-        movedFadeTimersRef.current.set(id, fadeTimer);
       }, 1000);
       movedHighlightTimersRef.current.set(id, timer);
     });
@@ -8580,6 +8817,47 @@ export default function ScriptEditor({
     });
   }, [effectiveCanEditRehearsalMark, isLockedMode, markOwnershipDirty, saveSnapshot]);
 
+  const convertMarkerBlockType = useCallback((blockId: string, nextType: Extract<BlockType, "chapter_marker" | "scene_marker">) => {
+    if (isLockedMode || !canEditMetadata) return;
+    const currentIdx = blockIndexByIdRef.current.get(blockId);
+    if (currentIdx === undefined) return;
+    const currentBlock = blocksRef.current[currentIdx];
+    if (!currentBlock) return;
+    if (!isMarkerBlock(currentBlock)) return;
+    if (currentBlock.type === nextType) return;
+    if (currentBlock.id === FIXED_INITIAL_CHAPTER_BLOCK_ID) return;
+
+    const sceneId = currentBlock.sceneId ?? uid();
+    const nextScene: Scene = {
+      id: sceneId,
+      number: "",
+      name: "",
+      parentId: nextType === "chapter_marker" ? null : findChapterIdForBlock(blockId),
+    };
+    const sceneExists = scenesRef.current.some((scene) => scene.id === nextScene.id);
+    const nextBlocks = blocksRef.current.map((block) => (
+      block.id === blockId
+        ? { ...block, type: nextType, sceneId }
+        : block
+    ));
+    const nextScenes = normalizeSceneRowsForMarkers(
+      sceneExists ? scenesRef.current : [...scenesRef.current, nextScene],
+      nextBlocks
+    );
+
+    saveSnapshot();
+    markOwnershipDirty({ start: currentIdx, end: currentIdx + 1, affectsMarkers: true });
+    setBlocks(normalizeScriptBlockStream(nextBlocks));
+    setScenes(nextScenes);
+    setSceneDetails((prev) => syncSceneDetailsWithScenes(
+      sceneExists ? prev : [...prev, toSceneDetail(nextScene)],
+      nextScenes
+    ));
+    selectionAnchorBlockIdRef.current = blockId;
+    rangeSelectionActiveRef.current = false;
+    setSelectedBlockIds(new Set([blockId]));
+  }, [canEditMetadata, findChapterIdForBlock, isLockedMode, markOwnershipDirty, saveSnapshot]);
+
   const splitBlock = useCallback((id: string, before: string, after: string) => {
     if (isLockedMode) return;
     saveSnapshot();
@@ -8664,6 +8942,14 @@ export default function ScriptEditor({
   const deleteBlock = useCallback((id: string) => {
     if (isLockedMode) return;
     if (id === FIXED_INITIAL_CHAPTER_BLOCK_ID) return;
+    const currentIdx = blockIndexByIdRef.current.get(id);
+    if (currentIdx === undefined) return;
+    if (
+      blocksRef.current[currentIdx].type === "rehearsal_marker" &&
+      rehearsalMarkerDeleteIds(blocksRef.current, currentIdx).size === 0
+    ) {
+      return;
+    }
     const blockedKind = blockedDramaturgyMarkerKindForBlockIds([id]);
     if (blockedKind) {
       setMarkerDetailDeleteBlockedKind(blockedKind);
@@ -8672,8 +8958,7 @@ export default function ScriptEditor({
     saveSnapshot();
     // Pre-generate replacement block ID outside the updater (Strict Mode fix).
     const emptyBlockId = uid();
-    const currentIdx = blocksRef.current.findIndex((block) => block.id === id);
-    if (currentIdx !== -1) markOwnershipDirty({ start: currentIdx, end: currentIdx + 1, affectsMarkers: true });
+    markOwnershipDirty({ start: currentIdx, end: currentIdx + 1, affectsMarkers: true });
     setBlocks((prev) => {
       const idx = prev.findIndex((b) => b.id === id);
       if (idx === -1) return prev;
@@ -8687,10 +8972,26 @@ export default function ScriptEditor({
         ? deletedBlock
         : previousChapterSceneMarker(prev, idx);
       const previousMarker = previousChapterSceneMarker(prev, idx - 1);
-      const nextFocus = prev[idx + 1] ?? prev[idx - 1];
+      const deleteIds = rehearsalMarkerDeleteIds(prev, idx);
+      let nextFocus: Block | undefined;
+      for (let cursor = idx + 1; cursor < prev.length; cursor++) {
+        if (!deleteIds.has(prev[cursor].id)) {
+          nextFocus = prev[cursor];
+          break;
+        }
+      }
+      for (let cursor = idx - 1; !nextFocus && cursor >= 0; cursor--) {
+        if (!deleteIds.has(prev[cursor].id)) nextFocus = prev[cursor];
+      }
       if (nextFocus) pendingFocus.current = { id: nextFocus.id, atEnd: false };
-      const remaining = prev.filter((b) => b.id !== id);
+      const remaining = prev.filter((b) => !deleteIds.has(b.id));
       return repairEmptyMarkerSegments(remaining, [currentMarker?.id, previousMarker?.id].filter((markerId): markerId is string => !!markerId));
+    });
+    setSelectedBlockIds((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
     });
     if (selectionAnchorBlockIdRef.current === id) {
       selectionAnchorBlockIdRef.current = null;
@@ -8700,7 +9001,19 @@ export default function ScriptEditor({
 
   const deleteBlocks = useCallback((ids: string[]) => {
     if (isLockedMode) return;
-    const deleteIds = new Set(ids.filter((id) => id !== FIXED_INITIAL_CHAPTER_BLOCK_ID));
+    const deleteIds = new Set<string>();
+    for (const id of ids) {
+      if (id === FIXED_INITIAL_CHAPTER_BLOCK_ID) continue;
+      const index = blockIndexByIdRef.current.get(id);
+      if (
+        index !== undefined &&
+        blocksRef.current[index]?.type === "rehearsal_marker" &&
+        rehearsalMarkerDeleteIds(blocksRef.current, index).size === 0
+      ) {
+        continue;
+      }
+      deleteIds.add(id);
+    }
     if (deleteIds.size === 0) return;
     const blockedKind = blockedDramaturgyMarkerKindForBlockIds(deleteIds);
     if (blockedKind) {
@@ -10182,17 +10495,6 @@ export default function ScriptEditor({
           }
         }
 
-        @keyframes scriptBlockGlowFade {
-          0% {
-            background-color: #eef3fa;
-            box-shadow: inset 0 0 0 9999px rgba(145, 168, 202, 0);
-          }
-          100% {
-            background-color: var(--script-block-glow-fade-end, #ffffff);
-            box-shadow: inset 0 0 0 9999px rgba(145, 168, 202, 0);
-          }
-        }
-
         @keyframes scriptTocMarkerGlow {
           0% {
             background-color: #eef3fa;
@@ -10214,10 +10516,6 @@ export default function ScriptEditor({
 
         .script-block-moved-glow {
           animation: scriptBlockMovedGlow 1s ease-in-out;
-        }
-
-        .script-block-glow-fade {
-          animation: scriptBlockGlowFade 0.5s ease-out;
         }
 
         .script-toc-marker-glow {
@@ -10317,13 +10615,22 @@ export default function ScriptEditor({
       <main className="mx-auto px-4 py-8" style={{ maxWidth: SCRIPT_EDITOR_MAX_WIDTH_PX }}>
         <div className="relative min-h-[70vh] rounded-2xl bg-white shadow-sm flex flex-col pt-6 pb-8">
           {display.lineNumbers && (
-            <span
-              ref={lineIndexMeasureRef}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 top-0 -z-10 select-none whitespace-pre tabular-nums text-[9px] leading-none opacity-0"
-            >
-              {maxLineIndexText}
-            </span>
+            <>
+              <span
+                ref={lineIndexMeasureRef}
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0 -z-10 select-none whitespace-pre tabular-nums text-[9px] leading-none opacity-0"
+              >
+                {maxLineIndexText}
+              </span>
+              <span
+                ref={lineIndexMinMeasureRef}
+                aria-hidden="true"
+                className="pointer-events-none absolute left-0 top-0 -z-10 select-none whitespace-pre tabular-nums text-[9px] leading-none opacity-0"
+              >
+                0000
+              </span>
+            </>
           )}
           <TableOfContents scenes={scenes} blocks={ownedBlocks} onScrollToScene={scrollToScene} />
           <div
@@ -10437,9 +10744,15 @@ export default function ScriptEditor({
                     dragTarget={dragTarget?.kind === "block" && dragTarget.id === block.id ? dragTarget : null}
                     isFixed={isFixedInitialChapter}
                     isRecentlyMoved={recentlyMovedBlockIds.has(block.id)}
-                    isMoveGlowFading={moveGlowFadingBlockIds.has(block.id)}
                     isTocHighlighted={tocHighlightedMarkerIds.has(block.id)}
                     onRemove={() => deleteBlock(block.id)}
+                    canAddChapterScene={!isFixedInitialChapter && canEditMetadata}
+                    canAddRehearsal={!isFixedInitialChapter && effectiveCanEditRehearsalMark}
+                    onAddChapterBefore={() => addChapterBeforeBlock(block.id)}
+                    onAddSceneBefore={() => addSceneBeforeBlock(block.id)}
+                    onAddRehearsalBefore={() => addRehearsalBeforeBlock(block.id)}
+                    onConvertToChapter={!isFixedInitialChapter && canEditMetadata ? () => convertMarkerBlockType(block.id, "chapter_marker") : undefined}
+                    onConvertToScene={!isFixedInitialChapter && canEditMetadata ? () => convertMarkerBlockType(block.id, "scene_marker") : undefined}
                     onDeleteConfirmChange={(confirming) => setMarkerDetailDeleteConfirmBlockId(confirming ? block.id : null)}
                     onSelect={() => {
                       selectionAnchorBlockIdRef.current = block.id;
@@ -10534,7 +10847,7 @@ export default function ScriptEditor({
                       const moved = moveDraggedBlocks(draggedIds, target);
                       if (!moved) unlockReorder();
                     }}
-                    lineIndexWidth={lineIndexWidthStyle}
+                    lineIndexWidth={markerLineIndexWidthStyle}
                   />
                 </div>
               ) : null;
@@ -10642,7 +10955,6 @@ export default function ScriptEditor({
                   isDeleteConfirmHighlighted={deleteConfirmingBlockIds.has(block.id)}
                   isCharacterFocusHighlighted={isCharacterFocusHighlighted}
                   isRecentlyMoved={recentlyMovedBlockIds.has(block.id)}
-                  isMoveGlowFading={moveGlowFadingBlockIds.has(block.id)}
                   deleteConfirmToken={deleteConfirmationRequest?.anchorId === block.id ? deleteConfirmationRequest.token : undefined}
                   selectedCount={selectedCount}
                   canDeleteWithoutConfirmation={canDeleteWithoutConfirmation}
