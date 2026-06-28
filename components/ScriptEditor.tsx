@@ -1820,8 +1820,12 @@ function ScriptMarkerRow({
           ) : canEdit ? (
             <button
               type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
                 if (isScriptDragging) return;
                 setConfirmDelete(true);
                 onDeleteConfirmChange?.(true);
@@ -1951,7 +1955,6 @@ function ScriptMarkerRow({
                 e.preventDefault();
                 e.stopPropagation();
                 if (isScriptDragging) return;
-                onSelect();
                 setConfirmDelete(true);
                 onDeleteConfirmChange?.(true);
               }}
@@ -9412,6 +9415,7 @@ export default function ScriptEditor({
   }, []);
 
   useEffect(() => {
+    const hasDeleteConfirmationOpen = deleteConfirmingBlockIds.size > 0 || markerDetailDeleteConfirmBlockId !== null;
     const handler = (e: PointerEvent) => {
       if (draggingBlockId.current || isReorderLockedRef.current) return;
       const target = e.target as HTMLElement | null;
@@ -9422,7 +9426,13 @@ export default function ScriptEditor({
       if (isViewportScrollbar) return;
       if (target.closest("[data-script-scene-detail='true']")) return;
       if (target.closest("[data-script-confirmation='true']")) return;
-      if (target.closest("[data-script-block-bar='true']") || target.closest("[data-script-marker-bar='true']") || target.closest("[data-script-selection-action='true']")) {
+      const isSelectionBarClick = !!target.closest("[data-script-block-bar='true'], [data-script-marker-bar='true']");
+      if (isSelectionBarClick || target.closest("[data-script-selection-action='true']")) {
+        if (isSelectionBarClick && hasDeleteConfirmationOpen) {
+          selectionAnchorBlockIdRef.current = null;
+          rangeSelectionActiveRef.current = false;
+          setSelectedBlockIds((current) => current.size === 0 ? current : new Set());
+        }
         dismissBlockConfirmations();
         return;
       }
@@ -9435,7 +9445,7 @@ export default function ScriptEditor({
     };
     document.addEventListener("pointerdown", handler);
     return () => document.removeEventListener("pointerdown", handler);
-  }, [dismissBlockConfirmations, selectedBlockIds.size]);
+  }, [deleteConfirmingBlockIds.size, dismissBlockConfirmations, markerDetailDeleteConfirmBlockId, selectedBlockIds.size]);
 
   useEffect(() => {
     const handler = (e: globalThis.KeyboardEvent) => {
