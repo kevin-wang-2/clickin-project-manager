@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext, getCueList, listCueListPermissions, listCues, createCue } from "@/lib/db";
+import { getProductionMemberContext, getCueList, listCueListPermissions, listCues, createCue, getVersion } from "@/lib/db";
 import { canEditCueList } from "@/lib/cue-list-types";
 import type { CueAnchor } from "@/lib/cue-types";
 import { broadcastCueUpdate } from "@/lib/server-cache";
@@ -15,6 +15,15 @@ async function getCtx(req: NextRequest, productionId: string) {
   return { session, memberRoles, isArchived };
 }
 
+async function resolveVersion(productionId: string, versionId?: string | null) {
+  if (!versionId) return { versionId: undefined };
+  const version = await getVersion(versionId);
+  if (!version || version.productionId !== productionId) {
+    return { error: Response.json({ error: "版本不存在" }, { status: 404 }) };
+  }
+  return { versionId };
+}
+
 export async function GET(
   req: NextRequest,
   ctx: RouteContext<"/api/production/[id]/cuelists/[cueListId]/cues">
@@ -22,7 +31,9 @@ export async function GET(
   const { id, cueListId } = await ctx.params;
   const { session } = await getCtx(req, id);
   if (!session) return Response.json({ error: "未登录" }, { status: 401 });
-  const versionId = req.nextUrl.searchParams.get("v") ?? undefined;
+  const resolved = await resolveVersion(id, req.nextUrl.searchParams.get("v"));
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
   const cues = await listCues(cueListId, versionId);
   return Response.json(cues);
 }
@@ -44,7 +55,9 @@ export async function POST(
   if (!canEditCueList(session.openId, memberRoles, session.isAdmin, cueList, permissions))
     return Response.json({ error: "权限不足" }, { status: 403 });
 
-  const versionId = req.nextUrl.searchParams.get("v") ?? undefined;
+  const resolved = await resolveVersion(id, req.nextUrl.searchParams.get("v"));
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
   const body = await req.json() as { number: string; name?: string; content?: string; start: CueAnchor; end: CueAnchor };
   if (!body.number?.trim()) return Response.json({ error: "编号不能为空" }, { status: 400 });
   if (!body.start || !body.end) return Response.json({ error: "缺少位置信息" }, { status: 400 });

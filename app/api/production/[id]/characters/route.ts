@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import {
   getProductionMemberContext, listCharactersByVersion, setCharacterMembers,
-  getActiveVersionId, loadProduction, applyPatchToDB,
+  getActiveVersionId, loadProduction, applyPatchToDB, ensureScriptMarkerMigration, getVersion,
 } from "@/lib/db";
 import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
@@ -14,6 +14,16 @@ async function getCtx(req: NextRequest, productionId: string) {
   return { session, memberRoles, overrides, isArchived };
 }
 
+async function resolveProductionVersion(productionId: string, requestedVersionId?: unknown) {
+  const versionId = ((typeof requestedVersionId === "string" && requestedVersionId) ? requestedVersionId : await getActiveVersionId(productionId)) ?? "";
+  if (!versionId) return { error: Response.json({ error: "无可用版本" }, { status: 404 }) };
+  const version = await getVersion(versionId);
+  if (!version || version.productionId !== productionId) {
+    return { error: Response.json({ error: "版本不存在" }, { status: 404 }) };
+  }
+  return { versionId };
+}
+
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[id]/characters">) {
   const { id } = await ctx.params;
   const { session, memberRoles, overrides } = await getCtx(req, id);
@@ -21,8 +31,16 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[
   if (!hasPermission("script:read", session.isAdmin, memberRoles, overrides)) {
     return Response.json({ error: "无权访问" }, { status: 403 });
   }
-  const versionId = req.nextUrl.searchParams.get("versionId") ?? await getActiveVersionId(id);
-  const characters = versionId ? await listCharactersByVersion(versionId) : [];
+  const resolved = await resolveProductionVersion(id, req.nextUrl.searchParams.get("versionId") ?? undefined);
+  if (resolved.error) {
+    return req.nextUrl.searchParams.has("versionId") ? resolved.error : Response.json([]);
+  }
+  const { versionId } = resolved;
+  const migration = await ensureScriptMarkerMigration(versionId);
+  if (migration.status === "running") {
+    return Response.json({ status: "updating", migration }, { status: 202 });
+  }
+  const characters = await listCharactersByVersion(versionId);
   return Response.json(characters);
 }
 
@@ -43,8 +61,13 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
     ? body.memberIds.filter((m: unknown) => typeof m === "string")
     : [];
 
-  const versionId = await getActiveVersionId(id) ?? '';
-  if (!versionId) return Response.json({ error: "无可用版本" }, { status: 404 });
+  const resolved = await resolveProductionVersion(id, body.versionId);
+  if (resolved.error) return resolved.error;
+  const { versionId } = resolved;
+  const migration = await ensureScriptMarkerMigration(versionId);
+  if (migration.status === "running") {
+    return Response.json({ status: "updating", migration }, { status: 202 });
+  }
 
   // Load current characters to check for duplicates
   const result = await loadProduction(id, versionId);
@@ -61,7 +84,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   tickAndBroadcastSeq(id, versionId);
 
   if (isAggregate && memberIds.length > 0) {
-    await setCharacterMembers(newChar.id, memberIds);
+    await setCharacterMembers(id, newChar.id, memberIds);
   }
   const charDetail = { ...newChar, gender: "", biography: "", roleType: "", memberIds };
   return Response.json({ ok: true, char: charDetail }, { status: 201 });

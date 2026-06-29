@@ -1,11 +1,17 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, getVersion } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { getProductionEvent, updateProductionEvent, deleteProductionEvent, setEventStageManagers, completeAllEventTechReqs } from "@/lib/event-db";
 import { maybeSendLatePublishDailyCall } from "@/lib/notify";
 
 type Ctx = { params: Promise<{ id: string; eventId: string }> };
+
+async function validateVersion(productionId: string, versionId?: string | null) {
+  if (!versionId) return true;
+  const version = await getVersion(versionId);
+  return version?.productionId === productionId;
+}
 
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { id: productionId, eventId } = await ctx.params;
@@ -43,6 +49,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   const validStatuses = new Set(["draft", "published", "completed", "cancelled"]);
   if (body.status && !validStatuses.has(body.status))
     return Response.json({ error: "无效的状态值" }, { status: 400 });
+  if ("versionId" in body && !(await validateVersion(productionId, body.versionId))) {
+    return Response.json({ error: "版本不存在" }, { status: 404 });
+  }
 
   await updateProductionEvent(eventId, productionId, {
     title: body.title?.trim(),

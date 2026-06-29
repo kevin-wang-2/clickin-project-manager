@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { canUserAccessProduction } from "@/lib/db";
+import { canUserAccessProduction, getVersion } from "@/lib/db";
 import { getPool } from "@/lib/pg";
 
 // Resolves stable block/cue IDs to their snapshot/revision IDs for the given version.
@@ -21,6 +21,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   if (!type || !stableId || !versionId)
     return Response.json({ error: "缺少 type / stableId / v 参数" }, { status: 400 });
+  const version = await getVersion(versionId);
+  if (!version || version.productionId !== id) {
+    return Response.json({ error: "版本不存在" }, { status: 404 });
+  }
 
   if (type === "block") {
     const res = await getPool().query<{ snapshot_id: string }>(

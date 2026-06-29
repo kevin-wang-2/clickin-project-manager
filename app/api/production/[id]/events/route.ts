@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
-import { getProductionMemberContext } from "@/lib/db";
+import { getProductionMemberContext, getVersion } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { listProductionEvents, createProductionEvent } from "@/lib/event-db";
 
@@ -8,6 +8,12 @@ type Ctx = { params: Promise<{ id: string }> };
 
 let _seq = 0;
 const uid = () => `ev${Date.now().toString(36)}${(++_seq).toString(36)}`;
+
+async function validateVersion(productionId: string, versionId?: string | null) {
+  if (!versionId) return true;
+  const version = await getVersion(versionId);
+  return version?.productionId === productionId;
+}
 
 export async function GET(req: NextRequest, ctx: Ctx) {
   const { id: productionId } = await ctx.params;
@@ -37,6 +43,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   };
   const title = body.title?.trim();
   if (!title) return Response.json({ error: "标题不能为空" }, { status: 400 });
+  if (!(await validateVersion(productionId, body.versionId))) {
+    return Response.json({ error: "版本不存在" }, { status: 404 });
+  }
 
   const event = await createProductionEvent({
     id: uid(),
