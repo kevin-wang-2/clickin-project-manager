@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS version (
   tags              TEXT[] NOT NULL DEFAULT '{}',
   parent_version_id TEXT REFERENCES version(id) ON DELETE SET NULL,
   status            version_status NOT NULL DEFAULT 'editing',
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  script_config     JSONB NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS version_production_idx ON version(production_id, created_at);

@@ -33,6 +33,7 @@ export type ScriptConfig = {
   stageDelimClose: string;
   pageLayout: PageLayout;
   textLayoutMode: ScriptTextLayoutMode;
+  openingChapterMarkerId: string | null;
 };
 
 export const DEFAULT_SCRIPT_CONFIG: ScriptConfig = {
@@ -40,6 +41,7 @@ export const DEFAULT_SCRIPT_CONFIG: ScriptConfig = {
   stageDelimClose: "）",
   pageLayout: "a4",
   textLayoutMode: "center",
+  openingChapterMarkerId: null,
 };
 
 export type ScriptState = {

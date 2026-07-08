@@ -4,7 +4,6 @@ import { getProductionMemberContext, listScenesByVersion, listSceneVersionsByVer
 import { hasPermission } from "@/lib/roles";
 import { parseSceneNum } from "@/lib/import/parse-scene-num";
 import type { SceneColMap, ParsedSceneNum, SceneConflict, ImportScenePreview } from "@/lib/import/types";
-import { FIXED_INITIAL_CHAPTER_BLOCK_ID } from "@/lib/script-fixed-markers";
 import { randomUUID } from "node:crypto";
 import { TOKEN_COOKIE } from "@/lib/feishu-auth";
 import { getSheetValues } from "@/lib/import/feishu-sheet";
@@ -59,7 +58,7 @@ async function resolveImportVersionId(req: NextRequest, productionId: string): P
 async function listExistingScenesForImport(versionId: string | null, productionId: string) {
   if (!versionId) return { scenes: await listProductionScenes(productionId), markerBacked: false };
   const markerScenes = await listScenesByVersion(versionId);
-  if (markerScenes.some((scene) => scene.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID)) {
+  if (markerScenes.length > 0) {
     return { scenes: markerScenes, markerBacked: true };
   }
   return { scenes: await listSceneVersionsByVersion(versionId), markerBacked: false };

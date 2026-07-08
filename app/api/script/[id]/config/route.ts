@@ -27,7 +27,7 @@ export async function PUT(req: NextRequest, ctx: RouteContext<"/api/script/[id]/
   const body = (await req.json()) as Partial<ScriptConfig>;
   const config: ScriptConfig = { ...DEFAULT_SCRIPT_CONFIG, ...body };
 
-  await saveScriptConfig(id, config);
+  await saveScriptConfig(id, versionId || null, config);
   // Broadcast config change to all connected SSE clients for this version
   broadcastEvent(id, versionId, "config", config);
 
