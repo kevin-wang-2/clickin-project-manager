@@ -37,6 +37,27 @@ function makeMarkerBlock(type: Extract<BlockType, "chapter_marker" | "scene_mark
   };
 }
 
+function markerSegmentHasScene(blocks: Block[], markerIndex: number): boolean {
+  for (let index = markerIndex + 1; index < blocks.length; index++) {
+    const block = blocks[index];
+    if (block.type === "chapter_marker") return false;
+    if (block.type === "scene_marker") return true;
+  }
+  return false;
+}
+
+function shouldRepairEmptyBlockAfterMarker(blocks: Block[], markerIndex: number, openingChapterMarkerId: string | null): boolean {
+  const marker = blocks[markerIndex];
+  if (
+    openingChapterMarkerId &&
+    marker?.id === openingChapterMarkerId &&
+    !markerSegmentHasScene(blocks, markerIndex)
+  ) {
+    return false;
+  }
+  return shouldInsertEmptyBlockAfterMarker(blocks, markerIndex);
+}
+
 async function getCtx(req: NextRequest, productionId: string) {
   const session = getSession(req.cookies);
   if (!session) return { session: null, memberRoles: null, overrides: new Map(), isArchived: false };
@@ -152,8 +173,9 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
   const afterId = insertBeforeIndex > 0 ? blocks[insertBeforeIndex - 1]?.id ?? null : null;
   const nextBlocks = [...blocks];
   nextBlocks.splice(insertBeforeIndex, 0, marker);
-  const needsEmptyBlockBeforeMarker = insertBeforeIndex > 0 && shouldInsertEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex - 1);
-  const needsEmptyBlockAfterMarker = shouldInsertEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex);
+  const openingChapterMarkerId = result?.state.config.openingChapterMarkerId ?? null;
+  const needsEmptyBlockBeforeMarker = insertBeforeIndex > 0 && shouldRepairEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex - 1, openingChapterMarkerId);
+  const needsEmptyBlockAfterMarker = shouldRepairEmptyBlockAfterMarker(nextBlocks, insertBeforeIndex, openingChapterMarkerId);
   const blockOps: Array<{ op: "insert"; block: Block; afterId: string | null }> = [];
   let markerAfterId = afterId;
   if (needsEmptyBlockBeforeMarker) {

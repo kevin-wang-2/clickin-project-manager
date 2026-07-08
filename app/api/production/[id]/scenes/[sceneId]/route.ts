@@ -6,7 +6,6 @@ import {
 } from "@/lib/db";
 import { tickAndBroadcastSeq } from "@/lib/server-cache";
 import { hasPermission } from "@/lib/roles";
-import { FIXED_INITIAL_CHAPTER_BLOCK_ID } from "@/lib/script-fixed-markers";
 import { isMarkerBlock, shouldInsertEmptyBlockAfterMarker } from "@/lib/script-marker-blocks";
 import type { Block } from "@/lib/script-types";
 
@@ -28,6 +27,15 @@ async function resolveProductionVersion(productionId: string, requestedVersionId
 }
 
 const METADATA_KEYS = ["synopsis", "actionLine", "music", "stageNotes", "expectedDuration"] as const;
+
+function markerSegmentHasScene(blocks: Block[], markerIndex: number): boolean {
+  for (let index = markerIndex + 1; index < blocks.length; index++) {
+    const block = blocks[index];
+    if (block.type === "chapter_marker") return false;
+    if (block.type === "scene_marker") return true;
+  }
+  return false;
+}
 
 export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production/[id]/scenes/[sceneId]">) {
   const { id, sceneId } = await ctx.params;
@@ -93,10 +101,6 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/producti
   if (!hasPermission("script:metadata", session.isAdmin, memberRoles, overrides)) {
     return Response.json({ error: "权限不足" }, { status: 403 });
   }
-  if (sceneId === FIXED_INITIAL_CHAPTER_BLOCK_ID) {
-    return Response.json({ error: "开场章节不可删除" }, { status: 400 });
-  }
-
   const body = _req.method === "DELETE" ? await _req.json().catch(() => ({})) : {};
   const resolved = await resolveProductionVersion(id, body.versionId);
   if (resolved.error) return resolved.error;
@@ -135,11 +139,20 @@ export async function DELETE(_req: NextRequest, ctx: RouteContext<"/api/producti
   if (markersToRepair.size > 0) {
     const remainingBlocks = blocks.filter((block) => !deletedMarkerIds.has(block.id));
     const markerIndexById = new Map(remainingBlocks.map((block, index) => [block.id, index]));
+    const openingChapterMarkerId = result.state.config.openingChapterMarkerId;
     const markerIndexes = [...markersToRepair]
       .map((id) => markerIndexById.get(id) ?? -1)
       .filter((index) => index >= 0)
       .sort((a, b) => b - a);
     for (const markerIndex of markerIndexes) {
+      const marker = remainingBlocks[markerIndex];
+      if (
+        openingChapterMarkerId &&
+        marker?.id === openingChapterMarkerId &&
+        !markerSegmentHasScene(remainingBlocks, markerIndex)
+      ) {
+        continue;
+      }
       if (!shouldInsertEmptyBlockAfterMarker(remainingBlocks, markerIndex)) continue;
       const emptyBlock: Block = {
         id: crypto.randomUUID(),

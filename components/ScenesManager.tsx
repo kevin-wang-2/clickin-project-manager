@@ -10,7 +10,6 @@ import DurationInput from "@/components/DurationInput";
 import { parseDuration } from "@/lib/duration";
 import { getChapterDurationDisplay } from "@/lib/scene-duration";
 import { withGeneratedSceneNumbers } from "@/lib/script-generated-labels";
-import { FIXED_INITIAL_CHAPTER_BLOCK_ID } from "@/lib/script-fixed-markers";
 
 type MetaFields = Pick<SceneDetail, "synopsis" | "actionLine" | "music" | "stageNotes" | "expectedDuration">;
 
@@ -537,7 +536,7 @@ export default function ScenesManager({ productionId, productionName, initialSce
                         marks={actMarkList}
                         childScenes={children}
                         canEdit={effectiveCanEdit}
-                        canDelete={act.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID}
+                        canDelete
                         productionId={productionId}
                         versionId={currentVersionId}
                         initialExpanded={act.id === initialExpandedId}
@@ -559,7 +558,7 @@ export default function ScenesManager({ productionId, productionName, initialSce
                             indent={true}
                             marks={marksMap[sub.id] ?? []}
                             canEdit={effectiveCanEdit}
-                            canDelete={sub.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID}
+                            canDelete
                             productionId={productionId}
                             versionId={currentVersionId}
                             initialExpanded={sub.id === initialExpandedId}
@@ -586,7 +585,7 @@ export default function ScenesManager({ productionId, productionName, initialSce
                     indent={false}
                     marks={marksMap[s.id] ?? []}
                     canEdit={effectiveCanEdit}
-                    canDelete={s.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID}
+                    canDelete
                     productionId={productionId}
                     versionId={currentVersionId}
                     initialExpanded={s.id === initialExpandedId}

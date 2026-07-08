@@ -2,17 +2,14 @@ import { type NextRequest } from "next/server";
 import { getSession } from "@/lib/session";
 import { TOKEN_COOKIE } from "@/lib/feishu-auth";
 import { getSheetValues } from "@/lib/import/feishu-sheet";
-import { getProductionMemberContext, listCharactersByVersion, importScriptToVersion, getVersion, getActiveVersionId, setCharacterMembers, bulkUpsertBlockTags, listTagGroups, saveScriptStageDelimiters, listScenesByVersion, ensureScriptMarkerMigration, ensureEmptyScriptBlocksForEmptyScenes } from "@/lib/db";
+import { getProductionMemberContext, listCharactersByVersion, importScriptToVersion, getVersion, getActiveVersionId, setCharacterMembers, bulkUpsertBlockTags, listTagGroups, saveScriptStageDelimiters, saveOpeningChapterMarkerId, listScenesByVersion, ensureScriptMarkerMigration, ensureEmptyScriptBlocksForEmptyScenes } from "@/lib/db";
 import { hasPermission } from "@/lib/roles";
 import { parseSceneNum } from "@/lib/import/parse-scene-num";
 import { parseCharacter, collectCharacters, guessIsAggregate } from "@/lib/import/parse-character";
 import type { ScriptColMap, TypeAction, TypeTagMapping, ImportScriptPreview, AggregateMembers, StageDelimiterPattern, ScriptConfigStageDelimiterPattern, JointImportMarker } from "@/lib/import/types";
 import { initialKeys } from "@/lib/lex-order";
 import { toAlphaLabel } from "@/lib/script-generated-labels";
-import {
-  FIXED_INITIAL_CHAPTER_BLOCK_ID,
-  FIXED_INITIAL_CHAPTER_NAME,
-} from "@/lib/script-fixed-markers";
+import { FIXED_INITIAL_CHAPTER_NAME } from "@/lib/script-fixed-markers";
 import type { BlockType } from "@/lib/script-types";
 import type { MarkerMeta } from "@/lib/script-types";
 import { randomUUID } from "node:crypto";
@@ -649,17 +646,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   }
 
-  const existingFixedInitialScene = existingScenes.find((scene) => scene.id === FIXED_INITIAL_CHAPTER_BLOCK_ID) ?? null;
-  if (!existingFixedInitialScene || existingFixedInitialScene.name === "") {
-    upsertScenesFromScript.unshift({
-      id: FIXED_INITIAL_CHAPTER_BLOCK_ID,
-      number: "",
-      name: FIXED_INITIAL_CHAPTER_NAME,
-      parentId: null,
-      sortOrder: 0,
-    });
-  }
-  if (replaceScenes) replacementSceneIds.add(FIXED_INITIAL_CHAPTER_BLOCK_ID);
+  const openingChapterMarkerId = randomUUID();
+  upsertScenesFromScript.unshift({
+    id: openingChapterMarkerId,
+    number: "",
+    name: FIXED_INITIAL_CHAPTER_NAME,
+    parentId: null,
+    sortOrder: 0,
+  });
+  if (replaceScenes) replacementSceneIds.add(openingChapterMarkerId);
 
   const upsertBlocksWithoutKeys: Omit<ImportBlock, "lexKey">[] = [];
   const blockTagAssignments: Array<{ blockId: string; groupId: string; optionId: string }> = [];
@@ -671,21 +666,21 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   upsertBlocksWithoutKeys.push({
     id: randomUUID(),
-    blockId: FIXED_INITIAL_CHAPTER_BLOCK_ID,
+    blockId: openingChapterMarkerId,
     type: "chapter_marker",
     content: "",
     stageComment: null,
     lyric: false,
     characterIds: [],
     characterAnnotations: {},
-    sceneId: FIXED_INITIAL_CHAPTER_BLOCK_ID,
+    sceneId: openingChapterMarkerId,
     rehearsalMark: null,
     markerMeta: {
       name: FIXED_INITIAL_CHAPTER_NAME,
       parentMarkerId: null,
     },
   });
-  currentChapterId = FIXED_INITIAL_CHAPTER_BLOCK_ID;
+  currentChapterId = openingChapterMarkerId;
 
   const pushSceneMarkerBlock = (type: Extract<BlockType, "chapter_marker" | "scene_marker">, sceneId: string) => {
     const scene = sceneById.get(sceneId);
@@ -775,14 +770,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       const scene = sceneByNum.get(override.num);
       if (!scene) continue;
       if (scene.parentId === null) {
-        if (scene.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID) {
+        if (scene.id !== openingChapterMarkerId) {
           pushSceneMarkerBlock("chapter_marker", scene.id);
         }
         currentChapterId = scene.id;
         currentRehearsalIndex = 0;
       } else {
         if (currentChapterId !== scene.parentId) {
-          if (scene.parentId !== FIXED_INITIAL_CHAPTER_BLOCK_ID) {
+          if (scene.parentId !== openingChapterMarkerId) {
             pushSceneMarkerBlock("chapter_marker", scene.parentId);
           }
           currentChapterId = scene.parentId;
@@ -804,7 +799,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       if (scene.parentId === null) {
         chapterIdsWithScriptBlocks.add(scene.id);
         if (currentChapterId !== scene.id) {
-          if (scene.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID) {
+          if (scene.id !== openingChapterMarkerId) {
             pushSceneMarkerBlock("chapter_marker", scene.id);
           }
           currentChapterId = scene.id;
@@ -814,7 +809,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       } else {
         chapterIdsWithScriptBlocks.add(scene.parentId);
         if (currentChapterId !== scene.parentId) {
-          if (scene.parentId !== FIXED_INITIAL_CHAPTER_BLOCK_ID) {
+          if (scene.parentId !== openingChapterMarkerId) {
             pushSceneMarkerBlock("chapter_marker", scene.parentId);
           }
           currentChapterId = scene.parentId;
@@ -839,7 +834,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const blankChapterIds = body.sceneOverrides ? new Set<string>() : new Set(
     [...sceneById.values()]
       .filter((scene) => (
-        scene.id !== FIXED_INITIAL_CHAPTER_BLOCK_ID &&
+        scene.id !== openingChapterMarkerId &&
         scene.parentId === null &&
         !chapterIdsWithScriptBlocks.has(scene.id)
       ))
@@ -863,6 +858,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     upsertScenes: upsertScenesFromScript,
     deleteSceneIds,
   });
+  await saveOpeningChapterMarkerId(productionId, versionId, openingChapterMarkerId);
   if (body.sceneOverrides) await ensureEmptyScriptBlocksForEmptyScenes(productionId, versionId);
 
   await saveScriptStageDelimiters(productionId, stageDelimiter.open, stageDelimiter.close);

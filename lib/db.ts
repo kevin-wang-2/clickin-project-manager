@@ -11,7 +11,6 @@ import { keyBetween, initialKeys } from "./lex-order";
 import { computePageMap } from "./script-page";
 import { generatedRehearsalMarksByScene, withGeneratedSceneNumbers } from "./script-generated-labels";
 import { VERSION_OWNED_BLOCKS_CTE, VERSION_SCENES_FROM_MARKERS_CTE } from "./script-marker-sql";
-import { FIXED_INITIAL_CHAPTER_BLOCK_ID } from "./script-fixed-markers";
 
 type MarkerMigrationState = {
   status: "idle" | "running" | "failed";
@@ -35,6 +34,7 @@ const markerMigrationState: MarkerMigrationState = (
 markerMigrationState.estimatedTotalMs ??= null;
 
 const markerMigrationNeededChecks = new Map<string, Promise<boolean>>();
+let openingChapterConfigColumnReady: Promise<void> | null = null;
 
 export type MarkerMigrationProgress = {
   status: "ready" | "running" | "failed";
@@ -427,6 +427,41 @@ async function runScriptMarkerMigration(): Promise<void> {
   markerMigrationState.phase = "正在完成数据校验";
 }
 
+async function ensureOpeningChapterConfigColumn(): Promise<void> {
+  openingChapterConfigColumnReady ??= getPool()
+    .query(`ALTER TABLE version ADD COLUMN IF NOT EXISTS script_config JSONB NOT NULL DEFAULT '{}'`)
+    .then(() => undefined);
+  await openingChapterConfigColumnReady;
+}
+
+async function backfillOpeningChapterConfig(versionId: string): Promise<void> {
+  await ensureOpeningChapterConfigColumn();
+  await getPool().query(
+    `WITH target_version AS (
+       SELECT id
+       FROM version
+       WHERE id = $1
+         AND NOT (COALESCE(script_config, '{}'::jsonb) ? 'openingChapterMarkerId')
+     ),
+     first_chapter AS (
+       SELECT sv.block_id
+       FROM script_version sv
+       JOIN script s ON s.id = sv.snapshot_id
+       JOIN target_version tv ON tv.id = sv.version_id
+       WHERE sv.version_id = $1
+         AND s.type = 'chapter_marker'
+       ORDER BY sv.sort_key
+       LIMIT 1
+     )
+     UPDATE version v
+     SET script_config = COALESCE(v.script_config, '{}'::jsonb)
+       || jsonb_build_object('openingChapterMarkerId', first_chapter.block_id)
+     FROM first_chapter
+     WHERE v.id = $1`,
+    [versionId]
+  );
+}
+
 export async function ensureScriptMarkerMigration(versionId: string): Promise<MarkerMigrationProgress> {
   if (markerMigrationState.status === "running") return markerMigrationProgress("running");
   if (markerMigrationState.status === "failed" && markerMigrationState.error) {
@@ -439,6 +474,7 @@ export async function ensureScriptMarkerMigration(versionId: string): Promise<Ma
   }
   const needed = await scriptMarkerMigrationNeededOnce(versionId);
   if (!needed) {
+    await backfillOpeningChapterConfig(versionId);
     return markerMigrationProgress("ready");
   }
 
@@ -688,6 +724,7 @@ export async function createVersion(
   fromVersionId: string,
   name: string,
 ): Promise<Version> {
+  await ensureOpeningChapterConfigColumn();
   const newVersionId = genVersionId();
   const client = await getPool().connect();
   try {
@@ -714,7 +751,9 @@ export async function createVersion(
     const now = nowRes.rows[0].now;
 
     await client.query(
-      "INSERT INTO version (id, production_id, name, parent_version_id, status, created_at) VALUES ($1, $2, $3, $4, 'editing', $5)",
+      `INSERT INTO version (id, production_id, name, parent_version_id, status, created_at, script_config)
+       SELECT $1, $2, $3, $4, 'editing', $5, COALESCE(script_config, '{}'::jsonb)
+       FROM version WHERE id = $4`,
       [newVersionId, productionId, name, fromVersionId, now]
     );
 
@@ -788,6 +827,7 @@ export async function rollbackToVersion(
   productionId: string,
   name: string,
 ): Promise<Version> {
+  await ensureOpeningChapterConfigColumn();
   const newVersionId = genVersionId();
   const client = await getPool().connect();
   try {
@@ -813,8 +853,10 @@ export async function rollbackToVersion(
     const now = nowRes.rows[0].now;
 
     await client.query(
-      "INSERT INTO version (id, production_id, name, parent_version_id, status, created_at) VALUES ($1, $2, $3, $4, 'editing', $5)",
-      [newVersionId, productionId, name, currentVersionId, now]
+      `INSERT INTO version (id, production_id, name, parent_version_id, status, created_at, script_config)
+       SELECT $1, $2, $3, $4, 'editing', $5, COALESCE(script_config, '{}'::jsonb)
+       FROM version WHERE id = $6`,
+      [newVersionId, productionId, name, currentVersionId, now, targetVersionId]
     );
 
     // Copy content from targetVersionId (not currentVersionId)
@@ -932,6 +974,7 @@ export type ProductionState = {
  * Returns null if the production doesn't exist.
  */
 export async function loadProduction(productionId: string, versionId: string): Promise<ProductionState | null> {
+  await ensureOpeningChapterConfigColumn();
   const pool = getPool();
 
   const [[blocksRes, scenesRes, charsRes], prodRes] = await Promise.all([
@@ -975,8 +1018,9 @@ export async function loadProduction(productionId: string, versionId: string): P
         [versionId]
       ),
     ]),
-    pool.query<{ script_config: ScriptConfig | null }>(
-      `SELECT p.script_config
+    pool.query<{ production_script_config: Partial<ScriptConfig> | null; version_script_config: Partial<ScriptConfig> | null }>(
+      `SELECT p.script_config AS production_script_config,
+              v.script_config AS version_script_config
        FROM production p
        JOIN version v ON v.production_id = p.id
        WHERE p.id = $1 AND v.id = $2`,
@@ -985,7 +1029,8 @@ export async function loadProduction(productionId: string, versionId: string): P
   ]);
 
   if (!prodRes.rows.length) return null;
-  const rawConfig = prodRes.rows[0]?.script_config;
+  const rawProductionConfig = prodRes.rows[0]?.production_script_config;
+  const rawVersionConfig = prodRes.rows[0]?.version_script_config;
 
   // script_character joins on snapshot_id (script.id)
   const snapshotIds_arr = blocksRes.rows.map(r => r.snapshot_id);
@@ -1029,7 +1074,28 @@ export async function loadProduction(productionId: string, versionId: string): P
         };
   });
 
-  const config: ScriptConfig = { ...DEFAULT_SCRIPT_CONFIG, ...(rawConfig ?? {}) };
+  const firstChapterMarkerId = blocks.find((block) => block.type === "chapter_marker")?.id ?? null;
+  let openingChapterMarkerId =
+    typeof rawVersionConfig?.openingChapterMarkerId === "string"
+      ? rawVersionConfig.openingChapterMarkerId
+      : null;
+  const hasConfiguredOpeningChapter = !!openingChapterMarkerId &&
+    blocks.some((block) => block.id === openingChapterMarkerId && block.type === "chapter_marker");
+  if (!hasConfiguredOpeningChapter) {
+    openingChapterMarkerId = firstChapterMarkerId;
+    if (openingChapterMarkerId) {
+      await pool.query(
+        "UPDATE version SET script_config = COALESCE(script_config, '{}'::jsonb) || $1::jsonb WHERE id = $2",
+        [JSON.stringify({ openingChapterMarkerId }), versionId]
+      );
+    }
+  }
+  const config: ScriptConfig = {
+    ...DEFAULT_SCRIPT_CONFIG,
+    ...(rawProductionConfig ?? {}),
+    ...(rawVersionConfig ?? {}),
+    openingChapterMarkerId,
+  };
 
   return {
     state: {
@@ -1043,10 +1109,35 @@ export async function loadProduction(productionId: string, versionId: string): P
   };
 }
 
-export async function saveScriptConfig(productionId: string, config: ScriptConfig): Promise<void> {
-  await getPool().query(
+export async function saveScriptConfig(productionId: string, versionId: string | null, config: ScriptConfig): Promise<void> {
+  const pool = getPool();
+  await pool.query(
     "UPDATE production SET script_config = $1 WHERE id = $2",
-    [JSON.stringify(config), productionId]
+    [JSON.stringify({
+      stageDelimOpen: config.stageDelimOpen,
+      stageDelimClose: config.stageDelimClose,
+      pageLayout: config.pageLayout,
+      textLayoutMode: config.textLayoutMode,
+    }), productionId]
+  );
+  if (versionId) {
+    await ensureOpeningChapterConfigColumn();
+    await pool.query(
+      "UPDATE version SET script_config = COALESCE(script_config, '{}'::jsonb) || $1::jsonb WHERE id = $2 AND production_id = $3",
+      [JSON.stringify({ openingChapterMarkerId: config.openingChapterMarkerId }), versionId, productionId]
+    );
+  }
+}
+
+export async function saveOpeningChapterMarkerId(
+  productionId: string,
+  versionId: string,
+  openingChapterMarkerId: string | null,
+): Promise<void> {
+  await ensureOpeningChapterConfigColumn();
+  await getPool().query(
+    "UPDATE version SET script_config = COALESCE(script_config, '{}'::jsonb) || $1::jsonb WHERE id = $2 AND production_id = $3",
+    [JSON.stringify({ openingChapterMarkerId }), versionId, productionId]
   );
 }
 
@@ -1683,11 +1774,20 @@ export async function ensureEmptyScriptBlocksForEmptyScenes(
         .map(row => row.marker_meta?.parentMarkerId)
         .filter((id): id is string => !!id),
     );
+    const configRes = await client.query<{ opening_chapter_marker_id: string | null }>(
+      "SELECT script_config->>'openingChapterMarkerId' AS opening_chapter_marker_id FROM version WHERE id = $1",
+      [versionId],
+    );
+    const configuredOpeningChapterMarkerId = configRes.rows[0]?.opening_chapter_marker_id ?? null;
+    const openingChapterMarkerId =
+      configuredOpeningChapterMarkerId && res.rows.some(row => row.block_id === configuredOpeningChapterMarkerId && row.type === "chapter_marker")
+        ? configuredOpeningChapterMarkerId
+        : res.rows.find(row => row.type === "chapter_marker")?.block_id ?? null;
 
     for (let index = 0; index < res.rows.length; index++) {
       const row = res.rows[index];
       if (row.type !== "scene_marker" && row.type !== "chapter_marker") continue;
-      if (row.block_id === FIXED_INITIAL_CHAPTER_BLOCK_ID) continue;
+      if (row.block_id === openingChapterMarkerId) continue;
       if (row.type === "chapter_marker" && childSceneParentIds.has(row.block_id)) continue;
 
       let hasScriptBlock = false;
@@ -2502,9 +2602,8 @@ export async function updateSceneMetadata(
          FROM script_version sv
          JOIN script s ON s.id = sv.snapshot_id
          WHERE sv.version_id = $1
-           AND sv.block_id <> $2
            AND s.type IN ('chapter_marker', 'scene_marker')`,
-        [versionId, FIXED_INITIAL_CHAPTER_BLOCK_ID]
+        [versionId]
       );
       const markerCount = parseInt(markerCountRes.rows[0]?.cnt ?? "0", 10);
       if (markerCount > 0) {
