@@ -14,7 +14,9 @@ type ChapterDurationDisplay = {
 
 export function getChapterDurationDisplay(
   children: SceneDurationSource[]
-): ChapterDurationDisplay {
+): ChapterDurationDisplay | null {
+  if (children.length === 0) return null;
+
   const missingSceneNumbers: string[] = [];
   let totalSeconds = 0;
 

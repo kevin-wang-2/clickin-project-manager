@@ -61,9 +61,13 @@ export async function PATCH(req: NextRequest, ctx: RouteContext<"/api/production
   if (typeof body.number === "string") markerMeta.number = body.number.trim();
   if (typeof body.name === "string") markerMeta.name = body.name.trim();
 
+  const shouldIgnoreExpectedDuration =
+    marker.type === "chapter_marker" &&
+    "expectedDuration" in body &&
+    result.state.scenes.some((scene) => scene.parentId === sceneId);
   const metaFields: Record<string, string> = {};
   for (const key of METADATA_KEYS) {
-    if (marker.type === "chapter_marker" && key === "expectedDuration") continue;
+    if (shouldIgnoreExpectedDuration && key === "expectedDuration") continue;
     if (key in body && typeof body[key] === "string") metaFields[key] = body[key];
   }
   Object.assign(markerMeta, metaFields);
