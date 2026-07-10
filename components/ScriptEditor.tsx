@@ -6707,6 +6707,8 @@ export default function ScriptEditor({
   const [scriptConfig, setScriptConfig] = useState<ScriptConfig>(DEFAULT_SCRIPT_CONFIG);
   const scriptConfigRef = useRef(scriptConfig);
   useEffect(() => { scriptConfigRef.current = scriptConfig; }, [scriptConfig]);
+  const syncOpeningChapterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (syncOpeningChapterTimerRef.current) clearTimeout(syncOpeningChapterTimerRef.current); }, []);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [pendingLockedMode, setPendingLockedMode] = useState<boolean | null>(null);
   const [pendingStageDelimiterChange, setPendingStageDelimiterChange] =
@@ -6732,12 +6734,18 @@ export default function ScriptEditor({
     const next = { ...scriptConfigRef.current, openingChapterMarkerId };
     scriptConfigRef.current = next;
     setScriptConfig(next);
-    const vParam = activeVersionId ? `?v=${encodeURIComponent(activeVersionId)}` : "";
-    void fetch(`${BASE_PATH}/api/script/${effectiveScriptId}/config${vParam}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(next),
-    });
+    // Debounce: rapid chapter reordering collapses into a single PUT using the
+    // latest ref value, preventing out-of-order stale writes.
+    if (syncOpeningChapterTimerRef.current) clearTimeout(syncOpeningChapterTimerRef.current);
+    syncOpeningChapterTimerRef.current = setTimeout(() => {
+      syncOpeningChapterTimerRef.current = null;
+      const vParam = activeVersionId ? `?v=${encodeURIComponent(activeVersionId)}` : "";
+      void fetch(`${BASE_PATH}/api/script/${effectiveScriptId}/config${vParam}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(scriptConfigRef.current),
+      });
+    }, 500);
   }, [activeVersionId, baseCanEditMetadata, effectiveScriptId]);
 
   const requestStageDelimiterChange = useCallback((open: string, close: string) => {
