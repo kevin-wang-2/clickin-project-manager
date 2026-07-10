@@ -77,11 +77,11 @@ jobs:
           SHARED="/var/www/production-manager/shared"
           DB="script_editor"
 
-          # Get all db/add-*.sql files ordered by first-commit date (oldest first),
+          # Get all db/add-*.sql and db/migrate-*.sql files ordered by first-commit date (oldest first),
           # alphabetically within the same commit.
-          ORDERED=$(git log --reverse --diff-filter=A --format="%H" -- 'db/add-*.sql' \
+          ORDERED=$(git log --reverse --diff-filter=A --format="%H" -- 'db/add-*.sql' 'db/migrate-*.sql' \
             | while read commit; do
-                git diff-tree --no-commit-id -r --name-only --diff-filter=A "$commit" -- 'db/add-*.sql' | sort
+                git diff-tree --no-commit-id -r --name-only --diff-filter=A "$commit" -- 'db/add-*.sql' 'db/migrate-*.sql' | sort
               done)
 
           if [ -z "$ORDERED" ]; then
