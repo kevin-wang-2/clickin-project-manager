@@ -1,0 +1,121 @@
+import { type NextRequest } from "next/server";
+import { getSession } from "@/lib/session";
+import { getPool } from "@/lib/pg";
+import { getProductionMemberContext } from "@/lib/db";
+import { hasPermission } from "@/lib/roles";
+
+type ViewConfig = {
+  columnOrder: string[];
+  visibleColumns: string[];
+  columnWidths: Record<string, number>;
+};
+
+type ViewRow = {
+  id: string;
+  open_id: string;
+  production_id: string;
+  view_name: string;
+  is_default: boolean;
+  config: ViewConfig;
+  created_at: string;
+  updated_at: string;
+};
+
+function uid(): string {
+  return `stv_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function getCtx(req: NextRequest, productionId: string) {
+  const session = getSession(req.cookies);
+  if (!session) return { session: null, memberRoles: null, overrides: new Map() };
+  const { memberRoles, overrides } = await getProductionMemberContext(session.openId, session.isAdmin, productionId);
+  return { session, memberRoles, overrides };
+}
+
+export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[id]/scene-table-views">) {
+  const { id } = await ctx.params;
+  const { session, memberRoles, overrides } = await getCtx(req, id);
+  if (!session) return Response.json({ error: "未登录" }, { status: 401 });
+  if (!hasPermission("script:read", session.isAdmin, memberRoles, overrides)) {
+    return Response.json({ error: "无权访问" }, { status: 403 });
+  }
+
+  const pool = getPool();
+  const res = await pool.query<ViewRow>(
+    `SELECT id, open_id, production_id, view_name, is_default, config, created_at, updated_at
+     FROM scene_table_view_config
+     WHERE open_id = $1 AND production_id = $2
+     ORDER BY is_default DESC, created_at ASC`,
+    [session.openId, id]
+  );
+
+  const views = res.rows.map((row) => ({
+    id: row.id,
+    name: row.view_name,
+    isDefault: row.is_default,
+    config: row.config,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
+  return Response.json({ views });
+}
+
+export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/[id]/scene-table-views">) {
+  const { id } = await ctx.params;
+  const { session, memberRoles, overrides } = await getCtx(req, id);
+  if (!session) return Response.json({ error: "未登录" }, { status: 401 });
+  if (!hasPermission("script:read", session.isAdmin, memberRoles, overrides)) {
+    return Response.json({ error: "无权访问" }, { status: 403 });
+  }
+
+  const body = await req.json();
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const config = body.config && typeof body.config === "object" ? body.config : {};
+  const isDefault = body.isDefault === true;
+
+  if (!name) {
+    return Response.json({ error: "视图名称不能为空" }, { status: 400 });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    if (isDefault) {
+      await client.query(
+        `UPDATE scene_table_view_config
+         SET is_default = false, updated_at = NOW()
+         WHERE open_id = $1 AND production_id = $2`,
+        [session.openId, id]
+      );
+    }
+
+    const newId = uid();
+    const res = await client.query<ViewRow>(
+      `INSERT INTO scene_table_view_config
+         (id, open_id, production_id, view_name, is_default, config)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, open_id, production_id, view_name, is_default, config, created_at, updated_at`,
+      [newId, session.openId, id, name, isDefault, JSON.stringify(config)]
+    );
+
+    await client.query("COMMIT");
+
+    const row = res.rows[0];
+    return Response.json({
+      id: row.id,
+      name: row.view_name,
+      isDefault: row.is_default,
+      config: row.config,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }, { status: 201 });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}

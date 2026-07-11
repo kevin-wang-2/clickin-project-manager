@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS scene_table_view_config (
+  id            TEXT PRIMARY KEY DEFAULT (gen_random_uuid())::text,
+  open_id       TEXT NOT NULL REFERENCES feishu_user(open_id) ON DELETE CASCADE,
+  production_id TEXT NOT NULL REFERENCES production(id) ON DELETE CASCADE,
+  view_name     TEXT NOT NULL DEFAULT '默认视图',
+  is_default    BOOLEAN NOT NULL DEFAULT false,
+  config        JSONB NOT NULL DEFAULT '{}',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS scene_table_view_user_prod_idx
+  ON scene_table_view_config (open_id, production_id);
