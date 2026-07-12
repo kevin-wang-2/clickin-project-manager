@@ -1,0 +1,114 @@
+name: PR Automation
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  # Assign the PR author as assignee so ownership is always visible in the PR list.
+  assign-author:
+    if: github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.addAssignees({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              assignees: [context.payload.pull_request.user.login],
+            });
+
+  # Post (or update) a migration checklist comment when db/add-*.sql or
+  # db/migrate-*.sql files are present in the PR. Removes the comment if those
+  # files are later removed from the PR.
+  migration-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- migration-checklist -->';
+            const pr = context.payload.pull_request;
+
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const migrationFiles = files
+              .filter(f => /^db\/(add|migrate)-.*\.sql$/.test(f.filename))
+              .map(f => f.filename);
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+            });
+            const existing = comments.find(
+              c => c.user.type === 'Bot' && c.body.includes(MARKER)
+            );
+
+            if (migrationFiles.length === 0) {
+              if (existing) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                });
+              }
+              return;
+            }
+
+            const fileList = migrationFiles.map(f => `- \`${f}\``).join('\n');
+            const verifyLines = migrationFiles
+              .map(f => `grep "${f.split('/').pop()}" /var/www/production-manager/shared/db-applied.txt`)
+              .join('\n');
+            const applyLines = migrationFiles
+              .map(f => `sudo -u postgres psql -d script_editor -f ${f}\necho "${f.split('/').pop()}" >> /var/www/production-manager/shared/db-applied.txt`)
+              .join('\n');
+
+            const body = `${MARKER}
+## ⚠️ 此 PR 包含数据库 Migration 文件
+
+以下文件将在合并后由 CD **自动执行**：
+${fileList}
+
+**Reviewer 检查项：**
+- [ ] Migration 使用 \`IF NOT EXISTS\`，可安全重复执行
+- [ ] 没有破坏性 schema 变更（删列、改非空类型等）导致当前线上代码 crash
+- [ ] 合并部署后，在服务器确认 migration 已执行：
+  \`\`\`bash
+  ${verifyLines}
+  \`\`\`
+
+**如果 CD 未自动执行，手动补跑：**
+\`\`\`bash
+${applyLines}
+\`\`\`
+`;
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
