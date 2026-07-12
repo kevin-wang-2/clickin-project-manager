@@ -457,12 +457,7 @@ async function backfillOpeningChapterConfig(versionId: string): Promise<void> {
 export async function ensureScriptMarkerMigration(versionId: string): Promise<MarkerMigrationProgress> {
   if (markerMigrationState.status === "running") return markerMigrationProgress("running");
   if (markerMigrationState.status === "failed" && markerMigrationState.error) {
-    markerMigrationState.status = "idle";
-    markerMigrationState.error = null;
-    markerMigrationState.startedAt = null;
-    markerMigrationState.progress = 0;
-    markerMigrationState.phase = "";
-    markerMigrationState.estimatedTotalMs = null;
+    return markerMigrationProgress("failed");
   }
   const needed = await scriptMarkerMigrationNeededOnce(versionId);
   if (!needed) {
@@ -1134,10 +1129,14 @@ export async function saveOpeningChapterMarkerId(
   productionId: string,
   versionId: string,
   openingChapterMarkerId: string | null,
+  showOpeningChapter?: boolean,
 ): Promise<void> {
+  const config = showOpeningChapter === undefined
+    ? { openingChapterMarkerId }
+    : { openingChapterMarkerId, showOpeningChapter };
   await getPool().query(
     "UPDATE version SET script_config = COALESCE(script_config, '{}'::jsonb) || $1::jsonb WHERE id = $2 AND production_id = $3",
-    [JSON.stringify({ openingChapterMarkerId }), versionId, productionId]
+    [JSON.stringify(config), versionId, productionId]
   );
 }
 
@@ -1627,7 +1626,21 @@ export async function importScriptToVersion(
     deleteSceneIds?: string[];
   },
 ): Promise<void> {
-  const { upsertBlocks, upsertChars, upsertScenes, deleteSceneIds = [] } = payload;
+  const { upsertBlocks, deleteSceneIds = [] } = payload;
+  const seenCharIds = new Set<string>();
+  const upsertChars = payload.upsertChars.filter((char) => {
+    if (seenCharIds.has(char.id)) return false;
+    seenCharIds.add(char.id);
+    return true;
+  });
+  const seenSceneIds = new Set<string>();
+  const upsertScenes = payload.upsertScenes
+    .filter((scene) => {
+      if (seenSceneIds.has(scene.id)) return false;
+      seenSceneIds.add(scene.id);
+      return true;
+    })
+    .map((scene, sortOrder) => ({ ...scene, sortOrder }));
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -2536,14 +2549,36 @@ export type SceneDetail = Scene & {
 };
 
 export async function listMarkerProjectionByVersion(
-  productionId: string,
   versionId: string,
 ): Promise<MarkerProjection[]> {
-  const [result, details] = await Promise.all([
-    loadProduction(productionId, versionId),
+  const [blocksRes, details] = await Promise.all([
+    getPool().query<Pick<BlockRow, "block_id" | "scene_id" | "marker_meta" | "type">>(
+      `SELECT sv.block_id, s.scene_id, s.marker_meta, s.type
+       FROM script_version sv
+       JOIN script s ON s.id = sv.snapshot_id
+       WHERE sv.version_id = $1
+         AND s.type IN ('chapter_marker', 'scene_marker', 'rehearsal_marker')
+       ORDER BY sv.sort_key`,
+      [versionId],
+    ),
     listScenesByVersion(versionId),
   ]);
-  return result ? projectMarkers(result.state, details) : [];
+  const blocks: Block[] = blocksRes.rows.map((row) => {
+    const { type, lyric } = fromDbType(row.type);
+    return {
+      id: row.block_id,
+      type,
+      lyric,
+      content: "",
+      forceShowCharacterName: false,
+      sceneId: isChapterSceneMarkerType(row.type) ? row.block_id : row.scene_id,
+      rehearsalMark: null,
+      markerMeta: cleanMarkerMeta(row.marker_meta),
+      characterIds: [],
+      characterAnnotations: {},
+    };
+  });
+  return projectMarkers({ blocks, scenes: details }, details);
 }
 
 export async function getSceneById(

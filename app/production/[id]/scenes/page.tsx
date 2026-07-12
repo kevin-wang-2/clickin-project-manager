@@ -40,7 +40,7 @@ export default async function ScenesPage({
     ? await (async () => {
         const migration = await ensureScriptMarkerMigration(resolvedVersionId);
         if (migration.status === "running") redirect(`/production/${id}/script?v=${resolvedVersionId}`);
-        return listMarkerProjectionByVersion(id, resolvedVersionId);
+        return listMarkerProjectionByVersion(resolvedVersionId);
       })()
     : [];
   return (

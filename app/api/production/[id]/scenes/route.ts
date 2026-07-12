@@ -39,7 +39,7 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[
   if (resolved.error) return resolved.error;
   const migration = await ensureScriptMarkerMigration(resolved.versionId);
   if (migration.status === "running") return Response.json({ status: "updating", migration }, { status: 202 });
-  const scenes = await listMarkerProjectionByVersion(id, resolved.versionId);
+  const scenes = await listMarkerProjectionByVersion(resolved.versionId);
   return req.nextUrl.searchParams.get("includeRehearsalMarks") === "1"
     ? Response.json({ scenes, rehearsalMarks: Object.fromEntries(scenes.map((scene) => [scene.id, scene.rehearsalMarks])) })
     : Response.json(scenes);

@@ -59,7 +59,7 @@ export default async function DramaturgyPage({
         const migration = await ensureScriptMarkerMigration(resolvedVersionId);
         if (migration.status === "running") redirect(`/production/${id}/script?v=${resolvedVersionId}`);
         return Promise.all([
-          listMarkerProjectionByVersion(id, resolvedVersionId),
+          listMarkerProjectionByVersion(resolvedVersionId),
           listCharactersByVersion(resolvedVersionId),
         ]);
       })()

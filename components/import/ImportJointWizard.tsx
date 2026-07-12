@@ -1224,7 +1224,7 @@ export default function ImportJointWizard({ productionId, versionId, onDone }: P
                 onKeyDown={e => { if (e.key === "Enter") createTagGroup(); }}
                 className="border border-gray-200 rounded px-2 py-1 text-xs w-40 focus:outline-none focus:border-blue-400"
               />
-              <button onClick={createTagGroup} className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-violet-700">创建</button>
+              <button onClick={createTagGroup} className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-800">创建</button>
             </div>
           </div>
 
