@@ -10,6 +10,7 @@ import DurationInput from "@/components/DurationInput";
 import { parseDuration } from "@/lib/duration";
 import { getChapterDurationDisplay } from "@/lib/scene-duration";
 import { withGeneratedSceneNumbers } from "@/lib/script-generated-labels";
+import BoundaryActionMenu from "@/components/BoundaryActionMenu";
 
 type MetaFields = Pick<SceneDetail, "synopsis" | "actionLine" | "music" | "stageNotes" | "expectedDuration">;
 
@@ -118,7 +119,6 @@ function SceneEditRow({
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(scene.name);
   const [saving, setSaving] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [expanded, setExpanded] = useState(initialExpanded ?? false);
   const rowRef = useRef<HTMLTableRowElement>(null);
@@ -201,31 +201,31 @@ function SceneEditRow({
             </div>
           )}
         </td>
-        <td className="px-4 py-3 text-right">
-          <div className="flex items-center justify-end gap-3">
-            {canEdit && canDelete && (
-              confirmDelete ? (
-                <>
-                  <button onClick={del} disabled={deleting} className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50">
-                    {deleting ? "删除中…" : "确认"}
-                  </button>
-                  <button onClick={() => setConfirmDelete(false)} className="text-xs text-zinc-400 hover:text-zinc-600">取消</button>
-                </>
-              ) : (
-                <button
-                  onClick={() => setConfirmDelete(true)}
-                  className="text-xs text-zinc-300 opacity-0 group-hover:opacity-100 hover:text-red-400 transition-all"
-                >
-                  删除
-                </button>
-              )
+        <td className="w-72 px-4 py-3 text-right">
+          <div className="flex h-5 items-center justify-end gap-3">
+            {canEdit && (
+              <span className="inline-flex h-5 items-center">
+                <BoundaryActionMenu
+                  conversionLabel={indent ? "转为章节" : "转为段落"}
+                  onDelete={canDelete ? () => { void del(); } : undefined}
+                  deleting={deleting}
+                />
+              </span>
             )}
             <button
               onClick={toggleExpanded}
-              className={`text-xs transition-all ${expanded ? "text-zinc-500" : "text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-zinc-600"}`}
+              className={`inline-flex h-5 w-5 items-center justify-center transition-all ${expanded ? "text-zinc-500" : "text-zinc-400 opacity-0 group-hover:opacity-100 hover:text-zinc-600"}`}
               title={expanded ? "收起" : "展开详情"}
             >
-              {expanded ? "⌃" : "⌄"}
+              <svg className="h-4 w-4" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <polyline
+                  points={expanded ? "3 7.5 6 4.5 9 7.5" : "3 4.5 6 7.5 9 4.5"}
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="square"
+                  strokeLinejoin="miter"
+                />
+              </svg>
             </button>
           </div>
         </td>
@@ -315,6 +315,19 @@ function InsertSceneRow({
   const [draftName, setDraftName] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: MouseEvent) => {
+      if (panelRef.current?.contains(event.target as Node)) return;
+      setOpen(null);
+      setDraftName("");
+      setError(null);
+    };
+    document.addEventListener("mousedown", dismiss);
+    return () => document.removeEventListener("mousedown", dismiss);
+  }, [open]);
 
   const submit = async (kind: "chapter" | "scene") => {
     if (!draftName.trim()) return;
@@ -336,12 +349,12 @@ function InsertSceneRow({
   return (
     <>
       <tr className="group border-b border-zinc-50">
-        <td colSpan={colSpan} className="px-4 py-1">
-          <div className="relative flex justify-center">
+        <td colSpan={colSpan} className="px-4 py-0">
+          <div ref={panelRef} className="relative flex justify-center">
             {!open ? (
               <button
                 onClick={() => setOpen(onAddScene ? "scene" : "chapter")}
-                className="flex h-5 w-5 items-center justify-center rounded-full text-[12px] leading-none text-zinc-300 opacity-0 transition-opacity hover:bg-zinc-100 hover:text-zinc-500 group-hover:opacity-100"
+                className="flex h-4 w-5 items-center justify-center rounded-full text-[11px] leading-none text-zinc-300 opacity-0 transition-opacity hover:bg-zinc-100 hover:text-zinc-500 group-hover:opacity-100"
                 aria-label="添加章节或场景"
               >
                 +
@@ -363,7 +376,7 @@ function InsertSceneRow({
                   <button
                     onClick={() => open === "chapter" ? submit("chapter") : setOpen("chapter")}
                     disabled={adding || (open === "chapter" && !draftName.trim())}
-                    className={`rounded px-2 py-1 text-xs transition-colors disabled:opacity-30 ${open === "chapter" ? "bg-zinc-800 text-white" : "text-zinc-500 hover:bg-zinc-100"}`}
+                    className={`rounded px-2 py-1 text-xs transition-colors disabled:pointer-events-none disabled:opacity-30 ${open === "chapter" ? "bg-zinc-800 text-white hover:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100"}`}
                   >
                     添加章节
                   </button>
@@ -372,7 +385,7 @@ function InsertSceneRow({
                   <button
                     onClick={() => open === "scene" ? submit("scene") : setOpen("scene")}
                     disabled={adding || (open === "scene" && !draftName.trim())}
-                    className={`rounded px-2 py-1 text-xs transition-colors disabled:opacity-30 ${open === "scene" ? "bg-blue-600 text-white" : "text-zinc-500 hover:bg-zinc-100"}`}
+                    className={`rounded px-2 py-1 text-xs transition-colors disabled:pointer-events-none disabled:opacity-50 ${open === "scene" ? "bg-blue-900/80 text-white hover:bg-blue-700/80" : "text-zinc-500 hover:bg-zinc-100"}`}
                   >
                     添加段落
                   </button>
@@ -505,13 +518,13 @@ export default function ScenesManager({ productionId, productionName, initialSce
               )}
             </div>
           ) : (
-            <table className="w-full">
+            <table className="w-full table-fixed">
               <thead>
                 <tr className="border-b border-zinc-100 text-left text-xs text-zinc-400">
                   <th className="px-4 py-3 font-medium w-24">编号</th>
                   <th className="px-4 py-3 font-medium">名称</th>
                   <th className="px-4 py-3 font-medium">排练记号</th>
-                  <th className="px-4 py-3" />
+                  <th className="w-72 px-4 py-3" />
                 </tr>
               </thead>
               <tbody>
