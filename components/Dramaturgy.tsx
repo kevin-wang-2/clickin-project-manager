@@ -54,6 +54,10 @@ export default function Dramaturgy({
   const [characters, setCharacters] = useState<CharacterDetail[]>(initialCharacters);
 
   const [sceneViewMode, setSceneViewMode] = useState<SceneViewMode>("list");
+
+  useEffect(() => {
+    setSceneViewMode(window.innerWidth > 1920 ? "table" : "list");
+  }, []);
   const [tableConfig, setTableConfig] = useState<TableViewConfigData>(getDefaultViewConfig());
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
