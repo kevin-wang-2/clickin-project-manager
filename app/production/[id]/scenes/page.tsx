@@ -42,7 +42,7 @@ export default async function ScenesPage({
         if (migration.status === "running") redirect(`/production/${id}/script?v=${resolvedVersionId}`);
         return Promise.all([listScenesByVersion(resolvedVersionId), listRehearsalMarksByVersion(resolvedVersionId)]);
       })()
-    : [[], {}] as const;
+    : [[] as Awaited<ReturnType<typeof listScenesByVersion>>, {} as Awaited<ReturnType<typeof listRehearsalMarksByVersion>>];
 
   return (
     <ScenesManager
