@@ -8,7 +8,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    envFiles: [".env.local"],
     testTimeout: 15000,
     globalSetup: "./tests/global-setup.ts",
   },
