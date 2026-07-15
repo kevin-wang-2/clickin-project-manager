@@ -1,3 +1,6 @@
+import { config } from "dotenv";
+config({ path: ".env.local" });
+
 import { getPool } from "@/lib/pg";
 
 const TEST_USER = "test-sys-user";
