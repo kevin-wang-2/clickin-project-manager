@@ -324,12 +324,6 @@
       "column": "production_id",
       "type": "text",
       "nullable": false
-    },
-    {
-      "column": "archived",
-      "type": "boolean",
-      "nullable": false,
-      "default": "false"
     }
   ],
   "character_aggregate": [
@@ -538,6 +532,11 @@
       "nullable": false
     },
     {
+      "column": "abbr",
+      "type": "text",
+      "nullable": true
+    },
+    {
       "column": "notes",
       "type": "text",
       "nullable": false,
@@ -564,11 +563,6 @@
       "type": "timestamp with time zone",
       "nullable": false,
       "default": "now()"
-    },
-    {
-      "column": "abbr",
-      "type": "text",
-      "nullable": true
     }
   ],
   "cue_list_permission": [
@@ -1098,6 +1092,16 @@
       "nullable": true
     },
     {
+      "column": "email",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "column": "phone",
+      "type": "text",
+      "nullable": true
+    },
+    {
       "column": "is_super_admin",
       "type": "boolean",
       "nullable": false,
@@ -1111,54 +1115,6 @@
     },
     {
       "column": "updated_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
-      "column": "email",
-      "type": "text",
-      "nullable": true
-    },
-    {
-      "column": "phone",
-      "type": "text",
-      "nullable": true
-    }
-  ],
-  "notification_job": [
-    {
-      "column": "id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "type",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "event_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "scheduled_at",
-      "type": "timestamp with time zone",
-      "nullable": false
-    },
-    {
-      "column": "processed_at",
-      "type": "timestamp with time zone",
-      "nullable": true
-    },
-    {
-      "column": "error",
-      "type": "text",
-      "nullable": true
-    },
-    {
-      "column": "created_at",
       "type": "timestamp with time zone",
       "nullable": false,
       "default": "now()"
@@ -1323,12 +1279,6 @@
       "nullable": false
     },
     {
-      "column": "added_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
       "column": "roles",
       "type": "ARRAY",
       "nullable": false,
@@ -1338,6 +1288,12 @@
       "column": "photo_url",
       "type": "text",
       "nullable": true
+    },
+    {
+      "column": "added_at",
+      "type": "timestamp with time zone",
+      "nullable": false,
+      "default": "now()"
     }
   ],
   "production_member_permission": [
@@ -1372,60 +1328,6 @@
       "column": "production_id",
       "type": "text",
       "nullable": false
-    },
-    {
-      "column": "archived",
-      "type": "boolean",
-      "nullable": false,
-      "default": "false"
-    }
-  ],
-  "scene_table_view_config": [
-    {
-      "column": "id",
-      "type": "text",
-      "nullable": false,
-      "default": "(gen_random_uuid())::text"
-    },
-    {
-      "column": "open_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "production_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "view_name",
-      "type": "text",
-      "nullable": false,
-      "default": "'默认视图'::text"
-    },
-    {
-      "column": "is_default",
-      "type": "boolean",
-      "nullable": false,
-      "default": "false"
-    },
-    {
-      "column": "config",
-      "type": "jsonb",
-      "nullable": false,
-      "default": "'{}'::jsonb"
-    },
-    {
-      "column": "created_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
-      "column": "updated_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
     }
   ],
   "scene_version": [
@@ -1556,23 +1458,6 @@
       "default": "''::text"
     },
     {
-      "column": "created_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
-      "column": "block_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "force_show_character_name",
-      "type": "boolean",
-      "nullable": false,
-      "default": "false"
-    },
-    {
       "column": "stage_comment",
       "type": "text",
       "nullable": true
@@ -1582,6 +1467,23 @@
       "type": "jsonb",
       "nullable": false,
       "default": "'{}'::jsonb"
+    },
+    {
+      "column": "force_show_character_name",
+      "type": "boolean",
+      "nullable": false,
+      "default": "false"
+    },
+    {
+      "column": "created_at",
+      "type": "timestamp with time zone",
+      "nullable": false,
+      "default": "now()"
+    },
+    {
+      "column": "block_id",
+      "type": "text",
+      "nullable": false
     }
   ],
   "script_character": [
@@ -1605,45 +1507,6 @@
       "column": "annotation",
       "type": "text",
       "nullable": true
-    }
-  ],
-  "script_operation": [
-    {
-      "column": "id",
-      "type": "bigint",
-      "nullable": false,
-      "default": "nextval('script_operation_id_seq'::regclass)"
-    },
-    {
-      "column": "script_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "open_id",
-      "type": "text",
-      "nullable": true
-    },
-    {
-      "column": "client_seq",
-      "type": "integer",
-      "nullable": false
-    },
-    {
-      "column": "op_index",
-      "type": "integer",
-      "nullable": false
-    },
-    {
-      "column": "op",
-      "type": "jsonb",
-      "nullable": false
-    },
-    {
-      "column": "created_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
     }
   ],
   "script_version": [
