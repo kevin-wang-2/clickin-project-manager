@@ -368,6 +368,30 @@ ssh click-in "cd /var/www/production-manager && npm install && npm run build && 
 
 本项目的测试套件以**预防为目的**，不是事后审计。每条测试都是对一条不变量的断言——随着代码演化，只要这条不变量被破坏，CI 就立即报告，而不是等到上线后才发现。
 
+被保护的不变量按优先级分两级：
+
+**Top Priority — 数据完整性**
+
+不论怎么操作、不论误操作、不论并发场景，数据不能乱。具体表现为：
+
+- 不能出现重复条目（duplicate key）
+- 不能出现孤儿条目（orphan rows——父记录已删、子记录仍存在）
+- 并发写入不能破坏状态一致性（advisory lock、last-write-wins 均需验证）
+- 级联删除必须全量触发
+
+数据一旦损坏，很难在不停服的情况下修复，且往往静默破坏后续功能，因此优先级最高。
+
+**P1 — 数据安全性**
+
+没有权限的用户不能读取或修改他人数据。具体表现为：
+
+- 跨 production 的读/写请求被拒（隔离性）
+- 未登录、session 篡改/过期均返回 401
+- 权限不足返回 403，且不能通过猜测 ID 绕过
+- `adminBypass: false` 权限（如 `script:edit`）即使超管也必须持有对应角色
+
+两者同样重要——数据完整性排在前面，是因为一旦破坏几乎不可逆；安全性问题原则上可以在不损失数据的前提下修补。
+
 测试运行器为 **Vitest**，直接连接测试数据库（与 CI 环境相同的 `script_editor` 库，seed 数据来自 `seed-data/ci.sql`）。
 
 ```bash
@@ -583,13 +607,18 @@ then re-export the seed with "npm run seed:ci-export".
 
 ### 10.6 覆盖范围约定
 
-| 类型 | 覆盖要求 |
-|------|---------|
-| 新增 DB 函数（`lib/db.ts` / `lib/event-db.ts`） | 建议在对应 `*.test.ts` 中加 happy path + 参数错误的基础测试 |
-| 新增 API route | **必须**在 `api.test.ts` 中加 auth guard（无 cookie → 401）和 authorization（非成员/非管理员 → 403）；happy path 和输入校验建议覆盖 |
-| 新增运行时 migration | **必须**在 `conventions.test.ts` 中加幂等性测试 |
-| Schema 变更（`db/add-*.sql`） | **必须**在干净 DB 上更新 `db/seed-schema.json`（`npm run seed:schema`）并重新导出 seed |
-| VCS / version 相关逻辑 | 暂不强制（逻辑较复杂，留待专项处理） |
-| 流式路由（SSE）、R2、飞书 Bot | 暂不强制（依赖外部服务，需独立策略） |
+优先级对应 §10.1 的两级原则：**Top** 保数据完整性，**P1** 保安全性。
 
-> **最低要求**：PR 合并前 `npm test` 必须全部通过。新增代码的测试覆盖不做硬性数字要求，但"必须"项是合并阻断条件。
+| 优先级 | 类型 | 覆盖要求 |
+|--------|------|---------|
+| **Top** | 新增会修改数据的 DB 函数 | **必须**在对应 `*.test.ts` 中加重复 ID 抛错、并发只有一个成功、删除后不可读的完整性验证 |
+| **Top** | 级联关系变更（外键、ON DELETE） | **必须**在 `resilience.test.ts` 中验证级联删除全量触发、无孤儿行 |
+| **Top** | 并发写入路径（advisory lock、唯一约束） | **必须**在 `api-race.test.ts` 中验证并发结果的一致性 |
+| **P1** | 新增 API route | **必须**在 `api.test.ts` 中加 auth guard（无 cookie → 401）和 authorization（非成员/非管理员 → 403）；`adminBypass:false` 路由还需验证 wrong-role → 403 |
+| **P1** | 新增跨 production 的读写操作 | **必须**在 `security.test.ts` 中加"错误 productionId → null / no-op"验证 |
+| — | 新增读操作 DB 函数 | 建议加 happy path + 不存在时返回 null 的测试 |
+| — | 新增运行时 migration | **必须**在 `conventions.test.ts` 中加幂等性测试 |
+| — | Schema 变更（`db/add-*.sql`） | **必须**在干净 DB 上更新 `db/seed-schema.json`（`npm run seed:schema`）并重新导出 seed |
+| — | 流式路由（SSE）、R2、飞书 Bot | 暂不强制（依赖外部服务，需独立策略） |
+
+> **合并阻断条件**：`npm test` 全部通过，且上表标注"**必须**"的覆盖项不能留白。
