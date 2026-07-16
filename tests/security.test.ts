@@ -8,7 +8,7 @@ import {
   createProduction, deleteProduction,
   createCueList, deleteCueList, getCueList, updateCueList,
   createCue, getCue, deleteCue,
-  listProductionScenes, getSceneById,
+  listScenesByVersion, getSceneById, getActiveVersionId,
   listProductionCharacters, getCharacterById,
   listCueLists,
 } from "@/lib/db";
@@ -21,8 +21,15 @@ const CL_ID      = "test-sec-cl";
 const CUE_ID     = "test-sec-cue";
 const EVENT_ID   = "test-sec-event";
 
+let planetVersionId: string;
+let cultureVersionId: string;
+let otherVersionId: string;
+
 beforeAll(async () => {
+  planetVersionId = (await getActiveVersionId(PROD_PLANET))!;
+  cultureVersionId = (await getActiveVersionId(PROD_CULTURE))!;
   await createProduction(OTHER_PROD, "隔离测试演出");
+  otherVersionId = (await getActiveVersionId(OTHER_PROD))!;
   await createCueList({
     id: CL_ID, productionId: PROD_PLANET, name: "安全测试走位表",
     notes: "", abbr: null, template: null, defaultEditRoles: [], createdBy: TEST_USER,
@@ -43,9 +50,9 @@ afterAll(async () => {
 });
 
 describe("production isolation — reads", () => {
-  it("listProductionScenes for OTHER_PROD cannot see PROD_PLANET scenes", async () => {
-    const ours   = await listProductionScenes(PROD_PLANET);
-    const theirs = await listProductionScenes(OTHER_PROD);
+  it("listScenesByVersion for OTHER_PROD cannot see PROD_PLANET scenes", async () => {
+    const ours   = await listScenesByVersion(planetVersionId);
+    const theirs = await listScenesByVersion(otherVersionId);
     const ourIds = new Set(ours.map((s) => s.id));
     expect(theirs.every((s) => !ourIds.has(s.id))).toBe(true);
   });
@@ -58,7 +65,7 @@ describe("production isolation — reads", () => {
   });
 
   it("getSceneById rejects correct id + wrong production", async () => {
-    const scenes = await listProductionScenes(PROD_PLANET);
+    const scenes = await listScenesByVersion(planetVersionId);
     const result = await getSceneById(scenes[0].id, OTHER_PROD);
     expect(result).toBeNull();
   });
@@ -102,8 +109,8 @@ describe("PROD_CULTURE cannot access PROD_PLANET resources by ID", () => {
     // Scene marker IDs can overlap (same content-derived IDs); isolation is
     // proved by `getSceneById` scoping the lookup through the correct version.
     // Pick an ID from PROD_PLANET that is NOT in PROD_CULTURE's active scene set.
-    const planet  = await listProductionScenes(PROD_PLANET);
-    const culture = await listProductionScenes(PROD_CULTURE);
+    const planet  = await listScenesByVersion(planetVersionId);
+    const culture = await listScenesByVersion(cultureVersionId);
     const cultureIds = new Set(culture.map((s) => s.id));
     const exclusive = planet.find((s) => !cultureIds.has(s.id));
     if (!exclusive) {

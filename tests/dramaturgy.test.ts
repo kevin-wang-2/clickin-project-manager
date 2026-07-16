@@ -1,16 +1,24 @@
-import { describe, it, expect } from "vitest";
-import { listProductionScenes, getSceneById, listProductionCharacters, getCharacterById } from "@/lib/db";
+import { describe, it, expect, beforeAll } from "vitest";
+import { listScenesByVersion, getSceneById, listProductionCharacters, getCharacterById, getActiveVersionId } from "@/lib/db";
 import { getPool } from "@/lib/pg";
 import { PROD_PLANET, PROD_CULTURE } from "./helpers";
 
+let planetVersionId: string;
+let cultureVersionId: string;
+
+beforeAll(async () => {
+  planetVersionId = (await getActiveVersionId(PROD_PLANET))!;
+  cultureVersionId = (await getActiveVersionId(PROD_CULTURE))!;
+});
+
 describe("scenes", () => {
-  it("listProductionScenes returns scenes for 我们的星星", async () => {
-    const scenes = await listProductionScenes(PROD_PLANET);
+  it("listScenesByVersion returns scenes for 我们的星星", async () => {
+    const scenes = await listScenesByVersion(planetVersionId);
     expect(scenes.length).toBeGreaterThan(0);
   });
 
-  it("listProductionScenes returns scenes for 供养2.0", async () => {
-    const scenes = await listProductionScenes(PROD_CULTURE);
+  it("listScenesByVersion returns scenes for 供养2.0", async () => {
+    const scenes = await listScenesByVersion(cultureVersionId);
     expect(scenes.length).toBeGreaterThan(0);
   });
 
@@ -23,7 +31,7 @@ describe("scenes", () => {
   });
 
   it("getSceneById returns the correct scene", async () => {
-    const scenes = await listProductionScenes(PROD_PLANET);
+    const scenes = await listScenesByVersion(planetVersionId);
     const first = scenes[0];
     const scene = await getSceneById(first.id, PROD_PLANET);
     expect(scene).not.toBeNull();
