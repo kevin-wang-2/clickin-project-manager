@@ -43,16 +43,21 @@ jobs:
           - 5432:5432
 
     steps:
+      # fetch-depth: 0 ensures github.event.before is in history regardless
+      # of merge strategy (squash, merge commit, rebase merge).
       - uses: actions/checkout@v4.2.2
         with:
-          fetch-depth: 2  # Need HEAD~1 to get the pre-migration schema
+          fetch-depth: 0
 
-      # Find migration files that are NEW in this push (not pre-existing).
-      # --diff-filter=A: Added files only; editing existing migrations is wrong.
+      # Use github.event.before — the SHA of main before this push — as the
+      # reference for the pre-migration state. This is correct for all merge
+      # strategies: squash (one new commit), merge commit (HEAD~1 = merge
+      # commit itself, not the previous main tip), and rebase (multi-commit push).
       - name: Detect new migration files in this push
         id: migrations
         run: |
-          FILES=$(git diff HEAD~1 HEAD --name-only --diff-filter=A -- 'db/add-*.sql' 'db/migrate-*.sql')
+          BEFORE="${{ github.event.before }}"
+          FILES=$(git diff "$BEFORE" HEAD --name-only --diff-filter=A -- 'db/add-*.sql' 'db/migrate-*.sql')
           if [ -z "$FILES" ]; then
             echo "No new migration files detected; nothing to do."
             echo "has_migrations=false" >> $GITHUB_OUTPUT
@@ -63,11 +68,11 @@ jobs:
             echo "$FILES"
           fi
 
-      # Apply the schema as it was BEFORE this push so that the old seed
-      # (which was exported against that schema) can be imported cleanly.
+      # Apply the schema as it was BEFORE this push so the old seed
+      # (exported against that schema) can be imported cleanly.
       - name: Apply pre-migration schema
         if: steps.migrations.outputs.has_migrations == 'true'
-        run: git show HEAD~1:db/schema.sql | psql
+        run: git show ${{ github.event.before }}:db/schema.sql | psql
 
       - uses: actions/setup-node@v4.4.0
         if: steps.migrations.outputs.has_migrations == 'true'
@@ -96,7 +101,7 @@ jobs:
         if: steps.migrations.outputs.has_migrations == 'true'
         run: |
           curl -fsSL "$SEED_URL" -o ci.sql
-          EXPECTED=$(git show HEAD~1:db/schema.sql | sha256sum | awk '{print $1}')
+          EXPECTED=$(git show ${{ github.event.before }}:db/schema.sql | sha256sum | awk '{print $1}')
           SEED_HASH=$(grep -m1 '^-- schema-hash: ' ci.sql | awk '{print $3}')
           if [ -z "$SEED_HASH" ]; then
             echo "FAIL: seed has no schema-hash header"
@@ -105,8 +110,8 @@ jobs:
           fi
           if [ "$EXPECTED" != "$SEED_HASH" ]; then
             echo "FAIL: seed schema hash mismatch"
-            echo "  expected (HEAD~1 schema): $EXPECTED"
-            echo "  seed has:                 $SEED_HASH"
+            echo "  expected (pre-push schema): $EXPECTED"
+            echo "  seed has:                   $SEED_HASH"
             echo "The seed is already out of sync before this migration — check git log."
             exit 1
           fi

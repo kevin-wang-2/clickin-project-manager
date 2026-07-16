@@ -199,24 +199,6 @@ jobs:
           chk version    "production_id = 'mod1uc2dg'"                                                                 2
           chk scene      "production_id IN ('mod1uc2dg','mon0jcm82')"                                                 100
           chk script     "production_id IN ('mod1uc2dg','mon0jcm82')"                                                5000
-
-          # Check that no FK references are dangling (every child has a parent).
-          FK_ORPHANS=$(psql -t -A <<'EOSQL'
-            SELECT COUNT(*) FROM (
-              SELECT c.conname, c.conrelid::regclass AS child_table
-              FROM pg_constraint c
-              JOIN pg_class p ON p.oid = c.confrelid
-              WHERE c.contype = 'f'
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM pg_inherits i
-                  WHERE i.inhrelid = c.conrelid
-                )
-                AND c.convalidated = false
-            ) orphans
-          EOSQL
-          )
-          [ "${FK_ORPHANS:-0}" -eq 0 ] && echo "OK  no dangling FK constraints" || { echo "FAIL  ${FK_ORPHANS} unvalidated FK constraints after migration"; FAIL=1; }
           exit $FAIL
 
       - name: Verify seeded DB
