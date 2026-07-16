@@ -193,9 +193,12 @@ jobs:
               const entry = `### ${f.filename}  [${f.status}  +${f.additions}/-${f.deletions}]\n${truncated}\n`;
               const remaining = MAX_TOTAL_CHARS - diffText.length;
               if (entry.length > remaining) {
-                diffText += entry.slice(0, remaining) + '\n… (cut here — total diff size limit reached)';
-                cutMidFile = true;
-                shownFiles++;
+                if (remaining > 0) {
+                  diffText += entry.slice(0, remaining);
+                  cutMidFile = true;
+                  shownFiles++;
+                }
+                diffText += '\n… (cut here — total diff size limit reached)';
                 break;
               }
               diffText += entry;
