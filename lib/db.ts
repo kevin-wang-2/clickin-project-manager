@@ -89,14 +89,6 @@ export type VersionedDbBlock = DbBlock & { snapshotId: string };
 export type DbScene = Scene & { sortOrder: number };
 export type DbChar = Character & { sortOrder: number };
 
-export type FlushPayload = {
-  upsertBlocks: DbBlock[];
-  deleteBlockIds: string[];
-  upsertChars: DbChar[];
-  deleteCharIds: string[];
-  upsertScenes: DbScene[];
-  deleteSceneIds: string[];
-};
 
 export type VersionedFlushPayload = {
   upsertBlocks: VersionedDbBlock[];
@@ -1364,16 +1356,27 @@ export async function flushToDBVersioned(
       }
     }
 
-    // Deletes: remove from version relation; garbage-collect orphan snapshots
+    // Deletes: remove from version relation; garbage-collect orphan snapshots.
+    // Two separate statements — CTE and its main query share one snapshot and
+    // cannot see each other's writes, so split into sequential statements.
     if (deleteSnapshotIds.length > 0) {
       await client.query(
-        `WITH removed AS (
-           DELETE FROM script_version WHERE snapshot_id = ANY($1::text[]) AND version_id = $2 RETURNING snapshot_id
-         )
-         DELETE FROM script s
-         WHERE s.id IN (SELECT snapshot_id FROM removed)
-           AND NOT EXISTS (SELECT 1 FROM script_version sv2 WHERE sv2.snapshot_id = s.id)`,
+        "DELETE FROM script_version WHERE snapshot_id = ANY($1::text[]) AND version_id = $2",
         [deleteSnapshotIds, versionId]
+      );
+      await client.query(
+        `DELETE FROM script s
+         WHERE s.id = ANY($1::text[])
+           AND NOT EXISTS (SELECT 1 FROM script_version sv WHERE sv.snapshot_id = s.id)`,
+        [deleteSnapshotIds]
+      );
+      // Clean up asset_mounts for snapshots that were actually GC'd
+      await client.query(
+        `DELETE FROM asset_mount
+         WHERE mount_type = 'block_snapshot'
+           AND mount_id = ANY($1::text[])
+           AND NOT EXISTS (SELECT 1 FROM script WHERE id = asset_mount.mount_id)`,
+        [deleteSnapshotIds]
       );
     }
 
@@ -1418,183 +1421,6 @@ export async function flushToDBVersioned(
   return { newSnapshotIds };
 }
 
-/** Legacy flush used by management pages (import-script, import-scenes).
- *  Operates on the active editing version; no CoW for blocks. */
-export async function flushToDB(productionId: string, payload: FlushPayload): Promise<void> {
-  const { upsertBlocks, deleteBlockIds, upsertChars, deleteCharIds, upsertScenes, deleteSceneIds } = payload;
-  if (!upsertBlocks.length && !deleteBlockIds.length && !upsertChars.length &&
-      !deleteCharIds.length && !upsertScenes.length && !deleteSceneIds.length) return;
-
-  const versionId = await getActiveVersionId(productionId);
-
-  // ── Phase 1: snapshot pre-flush state needed for cue drift ────────────────
-  const oldContents = new Map<string, string>();
-  const blockAdj = new Map<string, { prevId: string | null; nextId: string | null }>();
-
-  if (upsertBlocks.length > 0) {
-    const ids = upsertBlocks.map(b => b.id);
-    const res = await getPool().query<{ id: string; content: string }>(
-      "SELECT id, content FROM script WHERE id = ANY($1::text[])", [ids]
-    );
-    for (const r of res.rows) oldContents.set(r.id, r.content);
-  }
-
-  if (deleteBlockIds.length > 0 && versionId) {
-    const res = await getPool().query<{ id: string; prev_id: string | null; next_id: string | null }>(
-      `WITH ordered AS (
-         SELECT sv.snapshot_id AS id,
-           LAG(sv.snapshot_id)  OVER (ORDER BY sv.sort_key) AS prev_id,
-           LEAD(sv.snapshot_id) OVER (ORDER BY sv.sort_key) AS next_id
-         FROM script_version sv WHERE sv.version_id = $1
-       )
-       SELECT id, prev_id, next_id FROM ordered WHERE id = ANY($2::text[])`,
-      [versionId, deleteBlockIds]
-    );
-    for (const r of res.rows) blockAdj.set(r.id, { prevId: r.prev_id, nextId: r.next_id });
-  }
-
-  // ── Phase 2: main script transaction ─────────────────────────────────────
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-
-    if (upsertScenes.length > 0) {
-      await client.query(
-        `INSERT INTO scene (id, production_id)
-         SELECT unnest($1::text[]), $2::text
-         ON CONFLICT (id) DO NOTHING`,
-        [upsertScenes.map(s => s.id), productionId]
-      );
-      if (versionId) {
-        await client.query(
-          `INSERT INTO scene_version (scene_id, version_id, num, name, sort_order, parent_id)
-           SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::text[]), unnest($5::int[]), unnest($6::text[])
-           ON CONFLICT (scene_id, version_id) DO UPDATE
-             SET num = EXCLUDED.num, name = EXCLUDED.name,
-                 sort_order = EXCLUDED.sort_order, parent_id = EXCLUDED.parent_id`,
-          [upsertScenes.map(s => s.id), versionId,
-           upsertScenes.map(s => s.number), upsertScenes.map(s => s.name), upsertScenes.map(s => s.sortOrder),
-           upsertScenes.map(s => s.parentId ?? null)]
-        );
-      } else {
-        console.error(`[fallback] flushToDB: no active version for production ${productionId} — scene data lost (identity rows created, scene_version not written)`);
-      }
-    }
-
-    if (upsertChars.length > 0) {
-      await client.query(
-        `INSERT INTO character (id, production_id)
-         SELECT unnest($1::text[]), $2::text
-         ON CONFLICT (id) DO NOTHING`,
-        [upsertChars.map(c => c.id), productionId]
-      );
-      if (versionId) {
-        await client.query(
-          `INSERT INTO character_version (character_id, version_id, name, sort_order, is_aggregate)
-           SELECT unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::int[]), unnest($5::bool[])
-           ON CONFLICT (character_id, version_id) DO UPDATE
-             SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, is_aggregate = EXCLUDED.is_aggregate`,
-          [upsertChars.map(c => c.id), versionId,
-           upsertChars.map(c => c.name), upsertChars.map(c => c.sortOrder),
-           upsertChars.map(c => c.isAggregate)]
-        );
-      } else {
-        console.error(`[fallback] flushToDB: no active version for production ${productionId} — character data lost (identity rows created, character_version not written)`);
-      }
-    }
-
-    if (upsertBlocks.length > 0) {
-      // Full upsert into script (using block id as snapshot id — legacy mode)
-      await client.query(
-        `INSERT INTO script (id, block_id, production_id, sort_key, scene_id, rehearsal_mark, type, content, stage_comment, marker_meta, force_show_character_name)
-         SELECT unnest($1::text[]), unnest($1::text[]), $2::text, unnest($3::text[]), unnest($4::text[]),
-                unnest($5::text[]), unnest($6::block_type[]), unnest($7::text[]), unnest($8::text[]),
-                unnest($9::jsonb[]), unnest($10::bool[])
-         ON CONFLICT (id) DO UPDATE SET
-           block_id = EXCLUDED.block_id, sort_key = EXCLUDED.sort_key, scene_id = EXCLUDED.scene_id,
-           rehearsal_mark = EXCLUDED.rehearsal_mark, type = EXCLUDED.type, content = EXCLUDED.content,
-           stage_comment = EXCLUDED.stage_comment, marker_meta = EXCLUDED.marker_meta,
-           force_show_character_name = EXCLUDED.force_show_character_name`,
-        [
-          upsertBlocks.map(b => b.id), productionId,
-          upsertBlocks.map(b => b.lexKey), upsertBlocks.map(b => b.sceneId ?? null),
-          upsertBlocks.map(b => b.rehearsalMark ?? null), upsertBlocks.map(b => toDbType(b)),
-          upsertBlocks.map(b => b.content),
-          upsertBlocks.map(b => b.stageComment?.trim() || null),
-          upsertBlocks.map(b => markerMetaJson(b)),
-          upsertBlocks.map(b => b.forceShowCharacterName ?? false),
-        ]
-      );
-
-      // Upsert version relation if we have a versionId
-      if (versionId) {
-        await client.query(
-          `INSERT INTO script_version (snapshot_id, version_id, block_id, sort_key)
-           SELECT unnest($1::text[]), $2::text, unnest($1::text[]), unnest($3::text[])
-           ON CONFLICT (snapshot_id, version_id) DO UPDATE SET sort_key = EXCLUDED.sort_key`,
-          [upsertBlocks.map(b => b.id), versionId, upsertBlocks.map(b => b.lexKey)]
-        );
-      }
-
-      await client.query(
-        "DELETE FROM script_character WHERE script_id = ANY($1::text[])",
-        [upsertBlocks.map(b => b.id)]
-      );
-      const scRows = upsertBlocks.flatMap(b =>
-        b.characterIds.map((cid, pos) => ({ sid: b.id, cid, pos, ann: b.characterAnnotations[cid] ?? null }))
-      );
-      if (scRows.length > 0) {
-        await client.query(
-          `INSERT INTO script_character (script_id, character_id, position, annotation)
-           SELECT unnest($1::text[]), unnest($2::text[]), unnest($3::int[]), unnest($4::text[])`,
-          [scRows.map(r => r.sid), scRows.map(r => r.cid), scRows.map(r => r.pos), scRows.map(r => r.ann)]
-        );
-      }
-    }
-
-    if (deleteBlockIds.length > 0) {
-      if (versionId) {
-        await client.query(
-          `WITH removed AS (
-             DELETE FROM script_version WHERE snapshot_id = ANY($1::text[]) AND version_id = $2 RETURNING snapshot_id
-           )
-           DELETE FROM script s WHERE s.id IN (SELECT snapshot_id FROM removed)
-             AND NOT EXISTS (SELECT 1 FROM script_version sv2 WHERE sv2.snapshot_id = s.id)`,
-          [deleteBlockIds, versionId]
-        );
-      } else {
-        await client.query("DELETE FROM script WHERE id = ANY($1::text[])", [deleteBlockIds]);
-      }
-    }
-    if (deleteCharIds.length > 0)
-      await client.query("DELETE FROM character WHERE id = ANY($1::text[])", [deleteCharIds]);
-    if (deleteSceneIds.length > 0)
-      await client.query("DELETE FROM scene WHERE id = ANY($1::text[])", [deleteSceneIds]);
-
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  // ── Phase 3: cue drift adjustments (best-effort) ──────────────────────────
-  if (versionId) {
-    const driftJobs: Promise<void>[] = [];
-    for (const blockId of deleteBlockIds) {
-      const adj = blockAdj.get(blockId);
-      if (adj) driftJobs.push(handleBlockDeleted(blockId, adj.prevId, adj.nextId, versionId));
-    }
-    for (const block of upsertBlocks) {
-      const old = oldContents.get(block.id);
-      if (old !== undefined && old !== block.content)
-        driftJobs.push(handleBlockContentChanged(block.id, block.id, old, block.content, versionId));
-    }
-    if (driftJobs.length > 0) await Promise.allSettled(driftJobs);
-  }
-}
-
 /**
  * Brute-force import: clears ALL blocks from a specific version and replaces them.
  * No copy-on-write, no cue drift — caller is responsible for choosing an editing version.
@@ -1628,22 +1454,45 @@ export async function importScriptToVersion(
   try {
     await client.query("BEGIN");
 
-    // Clear all blocks from this version; GC snapshots no longer referenced by any version
-    await client.query(
-      `WITH removed AS (
-         DELETE FROM script_version WHERE version_id = $1 RETURNING snapshot_id, block_id
-       ),
-       deleted_orphan_tags AS (
-         DELETE FROM block_tag bt
-         WHERE bt.block_id IN (SELECT block_id FROM removed)
-           AND NOT EXISTS (SELECT 1 FROM script_version sv WHERE sv.block_id = bt.block_id)
-         RETURNING 1
-       )
-       DELETE FROM script s
-       WHERE s.id IN (SELECT snapshot_id FROM removed)
-         AND NOT EXISTS (SELECT 1 FROM script_version sv2 WHERE sv2.snapshot_id = s.id)`,
+    // Clear all blocks from this version; GC snapshots no longer referenced by any version.
+    // Split into three separate statements to avoid PostgreSQL CTE snapshot isolation:
+    // a single statement's NOT EXISTS would see the pre-deletion state of the CTE rows.
+    const removedSV = await client.query<{ snapshot_id: string; block_id: string }>(
+      "DELETE FROM script_version WHERE version_id = $1 RETURNING snapshot_id, block_id",
       [versionId]
     );
+    const removedSnapshotIds = removedSV.rows.map(r => r.snapshot_id);
+    const removedBlockIds    = removedSV.rows.map(r => r.block_id);
+
+    if (removedBlockIds.length > 0) {
+      await client.query(
+        `DELETE FROM block_tag WHERE block_id = ANY($1::text[])
+           AND NOT EXISTS (SELECT 1 FROM script_version sv WHERE sv.block_id = block_tag.block_id)`,
+        [removedBlockIds]
+      );
+    }
+    if (removedSnapshotIds.length > 0) {
+      await client.query(
+        `DELETE FROM script WHERE id = ANY($1::text[])
+           AND NOT EXISTS (SELECT 1 FROM script_version sv WHERE sv.snapshot_id = script.id)`,
+        [removedSnapshotIds]
+      );
+    }
+
+    // Clear cue bindings for this version; GC cue revision rows sole-referenced by it.
+    // Anchors are soft references (no FK), so deleted snapshots leave no FK constraint.
+    const removedCV = await client.query<{ revision_id: string }>(
+      "DELETE FROM cue_version WHERE version_id = $1 RETURNING revision_id",
+      [versionId]
+    );
+    const removedCueRevisionIds = removedCV.rows.map(r => r.revision_id);
+    if (removedCueRevisionIds.length > 0) {
+      await client.query(
+        `DELETE FROM cue WHERE id = ANY($1::text[])
+           AND NOT EXISTS (SELECT 1 FROM cue_version cv WHERE cv.revision_id = cue.id)`,
+        [removedCueRevisionIds]
+      );
+    }
 
     // Import is a full replacement of script + dramaturgy for this version.
     // scene_version is only a compatibility cache; rebuild it from markers below.
@@ -2499,12 +2348,6 @@ export async function listRehearsalMarksByVersion(versionId: string): Promise<Re
   })));
 }
 
-export async function listProductionScenes(productionId: string): Promise<SceneDetail[]> {
-  console.error(`[fallback] listProductionScenes called without versionId for production ${productionId} — caller should use listScenesByVersion directly`);
-  const versionId = await getActiveVersionId(productionId);
-  if (!versionId) return [];
-  return listScenesByVersion(versionId);
-}
 
 export async function getCharacterById(id: string, productionId: string, versionId?: string | null): Promise<CharacterDetail | null> {
   const resolvedVersionId = versionId ?? await (async () => {
@@ -2992,6 +2835,7 @@ export async function updateCue(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [versionId]);
     const refRes = await client.query<{ count: string }>(
       "SELECT COUNT(*) AS count FROM cue_version WHERE revision_id = $1", [id]
     );
@@ -3050,6 +2894,17 @@ export async function updateCue(
            AND version_id IN (SELECT id FROM descendants)`,
         [versionId, newId, id]
       );
+      // Copy cue_revision asset mounts to the new revision (mirrors cowCue behaviour)
+      await client.query(
+        `INSERT INTO asset_mount
+           (id, asset_id, production_id, mount_type, mount_id, mount_aux_id,
+            folder_path, mount_mode, version_resolved, created_by)
+         SELECT 'am_' || substr(md5(id || $1), 1, 16),
+           asset_id, production_id, 'cue_revision', $1, mount_aux_id,
+           folder_path, mount_mode, version_resolved, created_by
+         FROM asset_mount WHERE mount_type = 'cue_revision' AND mount_id = $2`,
+        [newId, id]
+      );
     }
     await client.query("COMMIT");
   } catch (e) {
@@ -3087,6 +2942,9 @@ export async function deleteCue(id: string, cueListId: string, versionId?: strin
     );
     if (parseInt(refRes.rows[0].count, 10) === 0) {
       await client.query("DELETE FROM cue WHERE id = $1 AND cue_list_id = $2", [id, cueListId]);
+      await client.query(
+        "DELETE FROM asset_mount WHERE mount_type = 'cue_revision' AND mount_id = $1", [id]
+      );
     }
     await client.query("COMMIT");
   } catch (e) {
@@ -3202,6 +3060,9 @@ async function removeCueFromVersion(
   );
   if (parseInt(refRes.rows[0].count, 10) <= 1) {
     await client.query("DELETE FROM cue WHERE id = $1", [revisionId]);
+    await client.query(
+      "DELETE FROM asset_mount WHERE mount_type = 'cue_revision' AND mount_id = $1", [revisionId]
+    );
   } else {
     await client.query(
       `WITH RECURSIVE descendants AS (
@@ -4346,15 +4207,25 @@ export async function applyPatchToDB(
           if (!cur) break; // already gone — skip silently
           if (isChapterSceneMarkerType(cur.type)) shouldSyncSceneVersions = true;
 
-          // Remove from version; GC orphan snapshot if no other version references it
+          // Remove from version; GC orphan snapshot if no other version references it.
+          // Two separate statements so the second sees the effect of the first
+          // (CTE and its main query share one snapshot and cannot see each other's writes).
           await client.query(
-            `WITH removed AS (
-               DELETE FROM script_version WHERE snapshot_id = $1 AND version_id = $2 RETURNING snapshot_id
-             )
-             DELETE FROM script s
-             WHERE s.id IN (SELECT snapshot_id FROM removed)
-               AND NOT EXISTS (SELECT 1 FROM script_version sv2 WHERE sv2.snapshot_id = s.id)`,
+            "DELETE FROM script_version WHERE snapshot_id = $1 AND version_id = $2",
             [cur.snapshotId, versionId]
+          );
+          await client.query(
+            `DELETE FROM script
+             WHERE id = $1
+               AND NOT EXISTS (SELECT 1 FROM script_version sv WHERE sv.snapshot_id = $1)`,
+            [cur.snapshotId]
+          );
+          // Clean up asset_mount for the GC'd block_snapshot if it was actually deleted
+          await client.query(
+            `DELETE FROM asset_mount
+             WHERE mount_type = 'block_snapshot' AND mount_id = $1
+               AND NOT EXISTS (SELECT 1 FROM script WHERE id = $1)`,
+            [cur.snapshotId]
           );
 
           // Clean up block_tag rows keyed by logical block_id.

@@ -249,21 +249,6 @@ CREATE INDEX IF NOT EXISTS block_tag_group_idx ON block_tag(group_id);
 
 -- ── Comments ──────────────────────────────────────────────────────────────────
 
--- Legacy per-block comments (used by early versions of the script editor).
-CREATE TABLE IF NOT EXISTS block_comment (
-  id            TEXT PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
-  production_id TEXT NOT NULL REFERENCES production(id) ON DELETE CASCADE,
-  block_id      TEXT NOT NULL,
-  open_id       TEXT NOT NULL REFERENCES feishu_user(open_id) ON DELETE CASCADE,
-  author_name   TEXT NOT NULL,
-  content       TEXT NOT NULL,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS block_comment_production_id_idx ON block_comment(production_id);
-CREATE INDEX IF NOT EXISTS block_comment_production_id_block_id_idx ON block_comment(production_id, block_id);
-
 -- Unified comment system: threaded, multi-context (block, event, report, etc.).
 CREATE TABLE IF NOT EXISTS comment (
   id            TEXT PRIMARY KEY DEFAULT (gen_random_uuid())::text,
