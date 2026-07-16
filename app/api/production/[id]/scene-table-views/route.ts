@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { getPool } from "@/lib/pg";
 import { hasPermission } from "@/lib/roles";
@@ -19,10 +20,6 @@ type ViewRow = {
   created_at: string;
   updated_at: string;
 };
-
-function uid(): string {
-  return `stv_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-}
 
 export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[id]/scene-table-views">) {
   const { id } = await ctx.params;
@@ -84,7 +81,7 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
       );
     }
 
-    const newId = uid();
+    const newId = randomUUID();
     const res = await client.query<ViewRow>(
       `INSERT INTO scene_table_view_config
          (id, open_id, production_id, view_name, is_default, config)
