@@ -1,9 +1,14 @@
 import { config } from "dotenv";
 config({ path: ".env.local" });
 
-import { readFile } from "fs/promises";
+import { readFile, writeFile } from "fs/promises";
 import path from "path";
 import { getPool } from "@/lib/pg";
+import {
+  isPreMigrationSchema,
+  capturePreMigrationSnapshot,
+  SNAPSHOT_PATH,
+} from "./migration-snapshot";
 
 // Fixed UUID for the test user — must match TEST_USER in helpers.ts
 const TEST_USER = "00000000-0000-0000-0000-000000000001";
@@ -11,13 +16,12 @@ const TEST_USER = "00000000-0000-0000-0000-000000000001";
 export async function setup() {
   const pool = getPool();
 
-  // Apply the internal-user-id migration if it hasn't been run yet.
-  // We check for the presence of app_user — if absent, the migration is needed.
-  const { rows: tableCheck } = await pool.query(`
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'app_user'
-  `);
-  if (tableCheck.length === 0) {
+  // Apply the internal-user-id migration if the DB is still on the old schema.
+  // Before migrating: capture a pre-migration snapshot for invariance tests.
+  if (await isPreMigrationSchema(pool)) {
+    const snapshot = await capturePreMigrationSnapshot(pool);
+    await writeFile(SNAPSHOT_PATH, JSON.stringify(snapshot));
+
     const migrationSql = await readFile(
       path.resolve(process.cwd(), "db/migrate-internal-user-id.sql"),
       "utf8"

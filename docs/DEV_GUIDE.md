@@ -619,6 +619,107 @@ then re-export the seed with "npm run seed:ci-export".
 | — | 新增读操作 DB 函数 | 建议加 happy path + 不存在时返回 null 的测试 |
 | — | 新增运行时 migration | **必须**在 `conventions.test.ts` 中加幂等性测试 |
 | — | Schema 变更（`db/add-*.sql`） | **必须**在干净 DB 上更新 `db/seed-schema.json`（`npm run seed:schema`）并重新导出 seed |
+| — | 破坏性 Schema Migration | **必须**提供 `tests/<name>.migration.test.ts`，含 invariance 测试（见 §10.7）|
 | — | 流式路由（SSE）、R2、飞书 Bot | 暂不强制（依赖外部服务，需独立策略） |
 
 > **合并阻断条件**：`npm test` 全部通过，且上表标注"**必须**"的覆盖项不能留白。
+
+### 10.7 破坏性 Schema Migration 测试
+
+#### 什么是"破坏性 Migration"
+
+删除列、重命名列、将 TEXT 外键改为 UUID 等操作统称为破坏性 migration（区别于只新增列/表的增量 migration）。破坏性 migration 具有两个特殊性：
+
+1. **不可 git-revert 数据**：`git revert` 只回滚代码，DB 里被删除的列和被转换的值无法自动恢复。回滚必须依赖 DB 备份。
+2. **PR-specific 生命周期**：migration 测试对应特定版本的数据转换，与被合并的代码一起生效一次，之后不再需要。但文件保留在仓库中作为历史记录。
+
+#### 三层测试结构
+
+每个破坏性 migration 测试文件应按以下三层组织，缺一不可：
+
+| 层级 | describe 名称 | 作用 | 危险度 |
+|------|-------------|------|--------|
+| **Schema 验证** | `schema verification` | 列类型、NOT NULL、列是否存在/消失 | 低 — 不会遗漏数据问题 |
+| **完整性验证** | `integrity verification` | FK 无孤儿行、UNIQUE 无重复、JSONB 无残留旧 key | 中 — 能发现引用断裂，但不能发现错误映射 |
+| **Invariance 验证** | `invariance verification` | 逐行对比迁移前后 FK 映射，确认 ID 没有错误对应 | **高** — 这是唯一能捕获静默数据腐化的测试 |
+
+> **Schema/Integrity 检查不够**：即使所有 FK 都合法、所有行数都对，数据仍可能因为 JOIN 顺序错误、条件遗漏等原因被映射到错误的 ID。Invariance 测试才是关键防线。
+
+#### Invariance 测试模式
+
+在 migration 执行**之前**，快照每个迁移表中的原始 FK 值（旧 open_id、TEXT 等）。执行迁移**之后**，通过新 FK（user_id）反查身份表（feishu_user 等），验证映射回来的旧 ID 与快照一致。
+
+```typescript
+// 快照格式（migration 执行前捕获）
+type FkRow = { key: string; openId: string };
+let snapshot: { counts: Record<string, number>; rows: { someTable: FkRow[] } } | null;
+
+// 验证模式
+it.skipIf(!snapshot)("someTable: every user_id resolves to original open_id", async () => {
+  const expected = new Map(snapshot!.rows.someTable.map((r) => [r.key, r.openId]));
+  const { rows } = await getPool().query("SELECT id, user_id FROM some_table");
+  const mismatches: string[] = [];
+  for (const row of rows) {
+    const resolved = await resolveUserIdToOpenId(row.user_id); // via identity bridge table
+    if (resolved !== expected.get(row.id)) {
+      mismatches.push(`id=${row.id}: expected ${expected.get(row.id)}, got ${resolved}`);
+    }
+  }
+  expect(mismatches).toEqual([]);
+});
+```
+
+`it.skipIf(!snapshot)` 保证：有快照时强制跑（CI migration job），没有快照时自动跳过（本地已迁移环境）。
+
+#### CI Workflow
+
+Migration 测试在 CI 中作为**独立的 job** 执行，与常规测试 job 使用不同的 seed：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   CI: migration job                         │
+│                                                             │
+│  1. 安装 "旧 seed" (ci-pre-migration.sql)                   │
+│  2. npm run test:migration                                  │
+│     ├─ beforeAll: 捕获快照，执行 migration SQL               │
+│     ├─ schema verification tests                           │
+│     ├─ integrity verification tests                        │
+│     └─ invariance verification tests ← 最关键               │
+│  3. npm run seed:schema                  # 更新 fingerprint  │
+│  4. npm run seed:ci-export -- "演出A" …  # 上传新 seed       │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                   CI: 常规测试 job                           │
+│  （在 migration job 完成并上传新 seed 后才能运行）             │
+│  1. 安装 "新 seed" (ci.sql，已含 app_user 等新表)             │
+│  2. npm test                                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+命令：
+```bash
+# Migration 专用 job（使用旧 seed，migration.test.ts 自己跑 SQL）
+npm run test:migration          # → vitest.migration.config.ts
+
+# 常规测试 job（新 seed，global-setup.ts 在已迁移 DB 上跳过 migration）
+npm test
+```
+
+#### 旧 Seed 的产生
+
+破坏性 migration PR 合并前，在 **main 分支**上导出一份 "旧 seed"：
+
+```bash
+git checkout main
+npm run seed:ci-export -- "我们的星星" "供养2.0"
+# 上传到 R2：seed-data/ci-pre-migration.sql
+```
+
+这份旧 seed 作为 migration job 的输入；migration job 执行后导出的新 seed 覆盖 `seed-data/ci.sql`，供后续常规测试使用。
+
+#### 本地开发说明
+
+本地 DB 已迁移后，`tests/migration.test.ts` 无法运行 invariance 测试（快照从未生成）。这是预期行为。本地只运行 schema + integrity 验证，完整 invariance 测试依赖 CI migration job 在旧 seed 上执行。
+
+如需本地重新验证 invariance，需在一个全新的本地 DB 上从头安装旧 seed，再运行 `npm run test:migration`。

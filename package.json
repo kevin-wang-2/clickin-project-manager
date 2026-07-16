@@ -11,7 +11,8 @@
     "seed:ci-export": "tsx scripts/export-seed.ts --ci",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "seed:schema": "tsx scripts/gen-seed-schema.ts > db/seed-schema.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:migration": "vitest run --config vitest.migration.config.ts"
   },
   "dependencies": {
     "@tailwindcss/typography": "^0.5.19",
