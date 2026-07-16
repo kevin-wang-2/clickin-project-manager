@@ -1787,7 +1787,7 @@ export async function getFeishuUser(openId: string): Promise<UserInfo | null> {
   );
   if (!res.rows.length) return null;
   const r = res.rows[0];
-  return { userId: r.user_id, name: r.name, avatarUrl: r.avatar_url, isAdmin: r.is_super_admin };
+  return { userId: r.user_id, openId, name: r.name, avatarUrl: r.avatar_url, isAdmin: r.is_super_admin };
 }
 
 /** Look up the Feishu open_id for an internal user — used by Feishu-specific subsystems. */
@@ -1809,10 +1809,10 @@ export async function batchGetFeishuOpenIds(userIds: string[]): Promise<Map<stri
 }
 
 export async function listAllUsers(): Promise<UserInfo[]> {
-  const res = await getPool().query<{ user_id: string; name: string; avatar_url: string | null; is_super_admin: boolean }>(
-    "SELECT user_id, name, avatar_url, is_super_admin FROM feishu_user ORDER BY name",
+  const res = await getPool().query<{ user_id: string; open_id: string; name: string; avatar_url: string | null; is_super_admin: boolean }>(
+    "SELECT user_id, open_id, name, avatar_url, is_super_admin FROM feishu_user ORDER BY name",
   );
-  return res.rows.map(r => ({ userId: r.user_id, name: r.name, avatarUrl: r.avatar_url, isAdmin: r.is_super_admin }));
+  return res.rows.map(r => ({ userId: r.user_id, openId: r.open_id, name: r.name, avatarUrl: r.avatar_url, isAdmin: r.is_super_admin }));
 }
 
 export async function canUserAccessProduction(userId: string, productionId: string): Promise<boolean> {
