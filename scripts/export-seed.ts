@@ -1,9 +1,10 @@
 /**
  * Export one or more productions from the local DB and upload the SQL seed
- * file to a public R2 bucket at key "seed-data/demo.sql".
+ * file to a public R2 bucket.
  *
  * Usage:
- *   npm run seed:export -- "供养2.0" "我们的星星"
+ *   npm run seed:export    -- "供养2.0" "我们的星星"          # demo seed
+ *   npm run seed:export    -- --ci "供养2.0" "我们的星星"     # CI seed (anonymized)
  *
  * Required env vars (in .env.local):
  *   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
@@ -26,7 +27,7 @@ const pool = new Pool({
   password: process.env.PGPASSWORD,
 });
 
-// ── R2 upload (targets SEED_R2_BUCKET, independent of main bucket config) ────
+// ── R2 upload ─────────────────────────────────────────────────────────────────
 
 async function uploadSeed(key: string, body: Buffer): Promise<void> {
   const accountId = process.env.R2_ACCOUNT_ID;
@@ -44,12 +45,12 @@ async function uploadSeed(key: string, body: Buffer): Promise<void> {
   const amzDate = now.toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
   const contentType = "text/plain; charset=utf-8";
   const payloadHash = crypto.createHash("sha256").update(body).digest("hex");
-  const path = `/${bucket}/${key}`;
+  const urlPath = `/${bucket}/${key}`;
 
   const canonicalHeaders =
     `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
   const signedHeaders = "content-type;host;x-amz-content-sha256;x-amz-date";
-  const canonicalRequest = [`PUT`, path, ``, canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const canonicalRequest = [`PUT`, urlPath, ``, canonicalHeaders, signedHeaders, payloadHash].join("\n");
 
   const credScope = `${dateStr}/${region}/s3/aws4_request`;
   const strToSign = ["AWS4-HMAC-SHA256", amzDate, credScope,
@@ -63,7 +64,7 @@ async function uploadSeed(key: string, body: Buffer): Promise<void> {
   const authorization =
     `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
-  const res = await fetch(`https://${host}${path}`, {
+  const res = await fetch(`https://${host}${urlPath}`, {
     method: "PUT",
     headers: {
       "content-type": contentType,
@@ -156,132 +157,297 @@ async function main() {
     if (missing.length > 0) console.warn(`Warning: not found: ${missing.join(", ")}`);
 
     const pids = pidRes.rows.map((r) => r.id);
-    const pidList = pids.map((_, i) => `$${i + 1}`).join(", ");
+    // Safe literal lists for embedding in SQL strings (not parameterized)
+    const idList = pids.map((id) => `'${id}'`).join(", ");
     console.log(`Exporting${ciMode ? " [CI mode]" : ""}: ${pidRes.rows.map((r) => `${r.name} (${r.id})`).join(", ")}`);
 
-    const vSub = `version_id IN (SELECT id FROM version WHERE production_id IN (${pidList}))`;
-    const sections: string[] = [];
-    const add = async (table: string, where: string, nullCols?: string[], skipCols?: string[]) =>
-      sections.push(await exportTable(client, table, where, pids, nullCols, skipCols));
-
-    // Insert production with active_version_id = NULL to avoid circular FK with version
-    await add("production",         `id IN (${pidList})`, ["active_version_id"]);
-    await add("version",            `production_id IN (${pidList})`);
-    await add("scene",              `production_id IN (${pidList})`, [], ["archived"]);
-    await add("character",          `production_id IN (${pidList})`, [], ["archived"]);
-    await add("character_aggregate",`aggregate_id IN (SELECT id FROM character WHERE production_id IN (${pidList}))`);
-    // Insert tag_group with circular FK cols NULLed; restored after tag_option inserts
-    await add("tag_group",          `production_id IN (${pidList})`, ["default_option_id", "lyric_split_after_option_id"]);
-    await add("tag_option",         `group_id IN (SELECT id FROM tag_group WHERE production_id IN (${pidList}))`);
-    await add("cue_list",           `production_id IN (${pidList})`);
-    await add("scene_version",      vSub);
-    await add("character_version",  vSub);
-    await add("script",             `production_id IN (${pidList})`);
-    await add("script_character",   `script_id IN (SELECT id FROM script WHERE production_id IN (${pidList}))`);
-    await add("script_version",     vSub);
-    await add("block_tag",          `block_id IN (SELECT DISTINCT block_id FROM script WHERE production_id IN (${pidList}))`);
-    const cueSub = `cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${pidList}))`;
-    await add("cue",         cueSub);
-    await add("cue_version", `${vSub} AND revision_id IN (SELECT id FROM cue WHERE ${cueSub})`);
-
-    // idList uses literal quoted values — safe for embedding in the seed SQL file
-    const idList = pids.map((id) => `'${id}'`).join(", ");
-    const vSubLit = `version_id IN (SELECT id FROM version WHERE production_id IN (${idList}))`;
-
-    // ── Collect user UUIDs referenced by exported tables ─────────────────────
-    // cue_list.created_by → app_user.id is the only user FK in the exported table set.
-    const createdByRes = await client.query<{ created_by: string }>(
-      `SELECT DISTINCT created_by FROM cue_list WHERE production_id = ANY($1) AND created_by IS NOT NULL`,
-      [pids]
-    );
-    const userUuids: string[] = createdByRes.rows.map((r) => r.created_by);
-
-    let userSection = "";
-    let userDelete = "";
-    const sectionsStr = sections.join("\n");
-
-    if (userUuids.length > 0) {
-      // Fetch feishu_user rows for these app_user UUIDs
-      const fuRes = await client.query<{
-        open_id: string; user_id: string; name: string;
-        avatar_url: string | null; is_super_admin: boolean;
-      }>(
-        `SELECT fu.open_id, fu.user_id, fu.name, fu.avatar_url, fu.is_super_admin
-         FROM feishu_user fu WHERE fu.user_id = ANY($1::uuid[])`,
-        [userUuids]
+    // ── Build open_id anonymization map (CI mode) ────────────────────────────
+    // Map ALL feishu_users so every open_id reference anywhere in the SQL is covered.
+    let openIdMap = new Map<string, string>(); // real → fake
+    let nameMap = new Map<string, string>();   // real open_id → fake display name
+    if (ciMode) {
+      const allUsers = await client.query<{ open_id: string; name: string }>(
+        "SELECT open_id, name FROM feishu_user ORDER BY open_id"
       );
+      allUsers.rows.forEach((r, i) => {
+        const fakeId = `seed-user-${i + 1}`;
+        openIdMap.set(r.open_id, fakeId);
+        nameMap.set(r.open_id, `演示用户${i + 1}`);
+      });
+    }
 
-      // app_user rows (id + created_at) — UUID is not PII
-      const auLines = [`-- app_user (${userUuids.length} rows)`];
-      for (const uuid of userUuids) {
-        auLines.push(
-          `INSERT INTO "app_user" ("id", "created_at") VALUES ('${uuid}', NOW()) ON CONFLICT DO NOTHING;`
+    // ── Subquery helpers ─────────────────────────────────────────────────────
+    const vSub = `version_id IN (SELECT id FROM version WHERE production_id IN (${idList}))`;
+    const cueSub = `cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${idList}))`;
+    const evSub = `event_id IN (SELECT id FROM production_event WHERE production_id IN (${idList}))`;
+    const rptSub = `report_id IN (SELECT id FROM event_report WHERE ${evSub})`;
+    const treqSub = `req_id IN (SELECT id FROM event_tech_req WHERE ${evSub})`;
+    const sitemSub = `item_id IN (SELECT id FROM event_schedule_item WHERE ${evSub})`;
+    const deptSub = `department_id IN (SELECT id FROM event_department WHERE production_id IN (${idList}))`;
+
+    // Columns to null out in CI mode (internal IDs, storage keys, personal URLs)
+    const CI_NULL_FEISHU_USER  = ["email", "phone", "avatar_url"];
+    const CI_NULL_PROD_MEMBER  = ["photo_url"];
+    const CI_NULL_ASSET        = ["feishu_url"];
+    const CI_NULL_ASSET_FILE   = ["r2_key", "thumbnail_r2_key"];
+    const CI_NULL_CHAT_ID      = ["chat_id"];
+
+    const sections: string[] = [];
+
+    // Helper: export table, optionally with CI-specific nullCols
+    const add = async (
+      table: string,
+      where: string,
+      params: unknown[],
+      { nullCols = [], skipCols = [], ciNullCols = [] }: {
+        nullCols?: string[];
+        skipCols?: string[];
+        ciNullCols?: string[];
+      } = {}
+    ) => {
+      const effectiveNullCols = ciMode ? [...nullCols, ...ciNullCols] : nullCols;
+      sections.push(await exportTable(client, table, where, params, effectiveNullCols, skipCols));
+    };
+
+    // ── TIER 0: no FK deps ───────────────────────────────────────────────────
+
+    // feishu_user: CI only — export ALL users anonymized.
+    // Demo mode skips this (local DB already has real feishu_user rows).
+    if (ciMode) {
+      const lines = [`-- feishu_user (${openIdMap.size} rows, anonymized)`];
+      for (const [, fakeId] of openIdMap) {
+        const n = fakeId.split("-").pop();
+        lines.push(
+          `INSERT INTO "feishu_user" ("open_id","name","avatar_url","is_super_admin","created_at","updated_at","email","phone") ` +
+          `VALUES ('${fakeId}','演示用户${n}',NULL,FALSE,NOW(),NOW(),NULL,NULL) ON CONFLICT DO NOTHING;`
         );
       }
+      sections.push(lines.join("\n") + "\n");
+    }
 
-      if (ciMode) {
-        // CI: anonymize open_id + name, null email/phone/avatar
-        const fuLines = [`-- feishu_user (${fuRes.rows.length} rows, anonymized)`];
-        fuRes.rows.forEach((row, i) => {
-          const fakeOpenId = `seed-user-${i + 1}`;
-          fuLines.push(
-            `INSERT INTO "feishu_user" ("open_id", "user_id", "name", "avatar_url", "is_super_admin", "created_at", "updated_at", "email", "phone") ` +
-            `VALUES ('${fakeOpenId}', '${row.user_id}', '演示用户${i + 1}', NULL, FALSE, NOW(), NOW(), NULL, NULL) ON CONFLICT DO NOTHING;`
-          );
-        });
-        userSection = auLines.join("\n") + "\n\n" + fuLines.join("\n") + "\n";
-        userDelete =
-          `DELETE FROM feishu_user WHERE open_id LIKE 'seed-user-%';\n` +
-          `DELETE FROM app_user WHERE id IN (${userUuids.map((u) => `'${u}'`).join(", ")});\n`;
-      } else {
-        // Demo: keep real open_id + name; null email/phone (PII)
-        const fuLines = [`-- feishu_user (${fuRes.rows.length} rows)`];
-        for (const row of fuRes.rows) {
-          const avatar = row.avatar_url ? `'${row.avatar_url.replace(/'/g, "''")}'` : "NULL";
-          fuLines.push(
-            `INSERT INTO "feishu_user" ("open_id", "user_id", "name", "avatar_url", "is_super_admin", "created_at", "updated_at", "email", "phone") ` +
-            `VALUES ('${row.open_id}', '${row.user_id}', '${row.name.replace(/'/g, "''")}', ${avatar}, ${row.is_super_admin}, NOW(), NOW(), NULL, NULL) ON CONFLICT DO NOTHING;`
-          );
-        }
-        userSection = auLines.join("\n") + "\n\n" + fuLines.join("\n") + "\n";
-        // Demo: user rows belong to real team members — do not delete them on cleanup
-        userDelete = "";
+    // bot_testers: CI only (global table, skip in demo to avoid clobbering real list)
+    if (ciMode) {
+      await add("bot_testers", "TRUE", [], { ciNullCols: ["name"] });
+    }
+
+    // ── TIER 1: deps on feishu_user / production ─────────────────────────────
+
+    // production: null active_version_id to break circular FK; restored at footer
+    await add("production", `id IN (${idList})`, [], { nullCols: ["active_version_id"] });
+
+    // event_department: depends only on production
+    await add("event_department", `production_id IN (${idList})`, [], { ciNullCols: CI_NULL_CHAT_ID });
+
+    // ── TIER 2: deps on production + version (version deps on production) ────
+
+    await add("version", `production_id IN (${idList})`, []);
+
+    // production_member: deps production + feishu_user
+    await add("production_member", `production_id IN (${idList})`, [], { ciNullCols: CI_NULL_PROD_MEMBER });
+
+    // production_member_permission: deps production_member
+    await add("production_member_permission", `production_id IN (${idList})`, []);
+
+    // cue_list: deps production + feishu_user (created_by = open_id)
+    await add("cue_list", `production_id IN (${idList})`, []);
+
+    // ── TIER 3: deps on cue_list / version / scene / character / tag_group ───
+
+    // cue_list_permission: deps cue_list + feishu_user
+    await add("cue_list_permission", `cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${idList}))`, []);
+
+    // scene: deps production
+    await add("scene", `production_id IN (${idList})`, [], { skipCols: ["archived"] });
+
+    // character: deps production
+    await add("character", `production_id IN (${idList})`, [], { skipCols: ["archived"] });
+
+    // character_aggregate: deps character
+    await add("character_aggregate",
+      `aggregate_id IN (SELECT id FROM character WHERE production_id IN (${idList}))`, []);
+
+    // tag_group: circular FK with tag_option — null them, restore in footer
+    await add("tag_group", `production_id IN (${idList})`, [],
+      { nullCols: ["default_option_id", "lyric_split_after_option_id"] });
+
+    // tag_option: deps tag_group
+    await add("tag_option",
+      `group_id IN (SELECT id FROM tag_group WHERE production_id IN (${idList}))`, []);
+
+    // scene_version / character_version: deps scene/character + version
+    await add("scene_version", vSub, []);
+    await add("character_version", vSub, []);
+
+    // script: deps production
+    await add("script", `production_id IN (${idList})`, []);
+
+    // script_character: deps script + character
+    await add("script_character",
+      `script_id IN (SELECT id FROM script WHERE production_id IN (${idList}))`, []);
+
+    // script_version: deps version
+    await add("script_version", vSub, []);
+
+    // block_tag: deps script + tag_option
+    await add("block_tag",
+      `block_id IN (SELECT DISTINCT block_id FROM script WHERE production_id IN (${idList}))`, []);
+
+    // cue / cue_version
+    await add("cue", cueSub, []);
+    await add("cue_version", `${vSub} AND revision_id IN (SELECT id FROM cue WHERE ${cueSub})`, []);
+
+    // comment: deps production + feishu_user (open_id)
+    await add("comment", `production_id IN (${idList})`, []);
+
+    // notification_subscription: CI only (global table, skip in demo)
+    if (ciMode) {
+      await add("notification_subscription", "TRUE", []);
+    }
+
+    // ── TIER 4: production_event and its subtables ───────────────────────────
+
+    // production_event: deps production + feishu_user + version
+    await add("production_event", `production_id IN (${idList})`, [], { ciNullCols: CI_NULL_CHAT_ID });
+
+    // event_department_member: deps event_department + feishu_user
+    await add("event_department_member", deptSub, []);
+
+    // event_stage_manager: deps production_event + feishu_user
+    await add("event_stage_manager", evSub, []);
+
+    // event_participant: deps production_event + feishu_user
+    await add("event_participant", evSub, []);
+
+    // event_schedule_item: deps production_event
+    await add("event_schedule_item", evSub, []);
+
+    // schedule_item_participant: deps event_schedule_item + feishu_user
+    await add("schedule_item_participant", sitemSub, []);
+
+    // schedule_item_department: deps event_schedule_item + event_department
+    await add("schedule_item_department", sitemSub, []);
+
+    // event_call_time: deps production_event + feishu_user + event_schedule_item
+    await add("event_call_time", evSub, []);
+
+    // event_tech_req: deps production_event + event_schedule_item
+    await add("event_tech_req", evSub, [], { ciNullCols: CI_NULL_CHAT_ID });
+
+    // event_tech_req_item: deps event_tech_req + event_schedule_item
+    await add("event_tech_req_item", treqSub, []);
+
+    // event_tech_assignee: deps event_tech_req + feishu_user
+    await add("event_tech_assignee", treqSub, []);
+
+    // event_report: deps production_event + feishu_user
+    await add("event_report", evSub, []);
+
+    // event_report_read: deps event_report + feishu_user
+    await add("event_report_read", rptSub, []);
+
+    // event_report_reply: deps event_report + feishu_user
+    await add("event_report_reply", rptSub, []);
+
+    // event_report_note: deps event_report + event_department + feishu_user
+    await add("event_report_note", rptSub, []);
+
+    // ── TIER 5: asset tables ─────────────────────────────────────────────────
+
+    // asset: deps production + feishu_user (uploader_open_id); include universal assets too
+    await add("asset", `production_id IN (${idList}) OR is_universal = TRUE`, [],
+      { ciNullCols: CI_NULL_ASSET });
+
+    // asset_file: deps asset
+    await add("asset_file",
+      `asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE)`, [],
+      { ciNullCols: CI_NULL_ASSET_FILE });
+
+    // asset_mount: deps asset + feishu_user + version
+    await add("asset_mount",
+      `asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE)`, []);
+
+    // asset_version_rel: deps asset + version
+    await add("asset_version_rel",
+      `asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE)`, []);
+
+    // ── Assemble SQL ─────────────────────────────────────────────────────────
+
+    // In CI mode: global replace of all real open_ids with fake counterparts.
+    // Covers every column and JSONB field without needing per-column logic.
+    let sectionsStr = sections.join("\n");
+    if (ciMode) {
+      for (const [realId, fakeId] of openIdMap) {
+        sectionsStr = sectionsStr.replaceAll(realId, fakeId);
       }
     }
 
+    // ── Header: DELETE in reverse-dependency order ───────────────────────────
     const schemaContent = readFileSync(path.join(process.cwd(), "db/schema.sql"));
     const schemaHash = crypto.createHash("sha256").update(schemaContent).digest("hex");
+
+    // CI: delete seed rows only (identified by fake open_id prefix)
+    // Demo: delete production-scoped rows only; global tables (feishu_user, bot_testers,
+    //        notification_subscription) are left untouched so local data isn't clobbered.
+    const ciGlobalDelete = [
+      `DELETE FROM notification_subscription WHERE open_id LIKE 'seed-user-%';`,
+      `DELETE FROM bot_testers WHERE open_id LIKE 'seed-user-%';`,
+      `DELETE FROM feishu_user WHERE open_id LIKE 'seed-user-%';`,
+    ].join("\n");
 
     const header = [
       `-- ${ciMode ? "CI test" : "Demo"} seed data`,
       `-- Productions: ${pidRes.rows.map((r) => r.name).join(", ")}`,
       `-- Generated: ${new Date().toISOString()}`,
       ...(ciMode ? [`-- schema-hash: ${schemaHash}`] : []),
-      `-- Re-running seed:demo replaces only these productions; other local data is untouched.`,
       ``,
-      `-- Delete in reverse-dependency order to avoid FK violations`,
-      `DELETE FROM cue_version WHERE ${vSubLit};`,
-      `DELETE FROM script_version WHERE ${vSubLit};`,
-      `DELETE FROM character_version WHERE ${vSubLit};`,
-      `DELETE FROM scene_version WHERE ${vSubLit};`,
+      `-- Delete in reverse-dependency order`,
+      `DELETE FROM asset_version_rel WHERE asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE);`,
+      `DELETE FROM asset_mount       WHERE asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE);`,
+      `DELETE FROM asset_file        WHERE asset_id IN (SELECT id FROM asset WHERE production_id IN (${idList}) OR is_universal = TRUE);`,
+      `DELETE FROM asset             WHERE production_id IN (${idList}) OR is_universal = TRUE;`,
+      `DELETE FROM event_report_note  WHERE ${rptSub};`,
+      `DELETE FROM event_report_reply WHERE ${rptSub};`,
+      `DELETE FROM event_report_read  WHERE ${rptSub};`,
+      `DELETE FROM event_report       WHERE ${evSub};`,
+      `DELETE FROM event_tech_assignee WHERE ${treqSub};`,
+      `DELETE FROM event_tech_req_item WHERE ${treqSub};`,
+      `DELETE FROM event_tech_req      WHERE ${evSub};`,
+      `DELETE FROM event_call_time     WHERE ${evSub};`,
+      `DELETE FROM schedule_item_department WHERE ${sitemSub};`,
+      `DELETE FROM schedule_item_participant WHERE ${sitemSub};`,
+      `DELETE FROM event_schedule_item  WHERE ${evSub};`,
+      `DELETE FROM event_participant    WHERE ${evSub};`,
+      `DELETE FROM event_stage_manager  WHERE ${evSub};`,
+      `DELETE FROM event_department_member WHERE ${deptSub};`,
+      `DELETE FROM production_event WHERE production_id IN (${idList});`,
+      `DELETE FROM comment WHERE production_id IN (${idList});`,
+      `DELETE FROM cue_version WHERE ${vSub};`,
+      `DELETE FROM cue WHERE ${cueSub};`,
+      `DELETE FROM cue_list_permission WHERE cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${idList}));`,
       `DELETE FROM block_tag WHERE block_id IN (SELECT DISTINCT block_id FROM script WHERE production_id IN (${idList}));`,
+      `DELETE FROM script_version WHERE ${vSub};`,
       `DELETE FROM script_character WHERE script_id IN (SELECT id FROM script WHERE production_id IN (${idList}));`,
       `DELETE FROM script WHERE production_id IN (${idList});`,
-      `DELETE FROM cue WHERE cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${idList}));`,
-      `DELETE FROM cue_list WHERE production_id IN (${idList});`,
-      userDelete,
+      `DELETE FROM character_version WHERE ${vSub};`,
+      `DELETE FROM scene_version WHERE ${vSub};`,
+      `UPDATE tag_group SET default_option_id = NULL, lyric_split_after_option_id = NULL WHERE production_id IN (${idList});`,
       `DELETE FROM tag_option WHERE group_id IN (SELECT id FROM tag_group WHERE production_id IN (${idList}));`,
       `DELETE FROM tag_group WHERE production_id IN (${idList});`,
       `DELETE FROM character_aggregate WHERE aggregate_id IN (SELECT id FROM character WHERE production_id IN (${idList}));`,
       `DELETE FROM character WHERE production_id IN (${idList});`,
       `DELETE FROM scene WHERE production_id IN (${idList});`,
+      `DELETE FROM cue_list WHERE production_id IN (${idList});`,
+      `DELETE FROM production_member_permission WHERE production_id IN (${idList});`,
+      `DELETE FROM production_member WHERE production_id IN (${idList});`,
+      `DELETE FROM event_department WHERE production_id IN (${idList});`,
       `UPDATE production SET active_version_id = NULL WHERE id IN (${idList});`,
       `DELETE FROM version WHERE production_id IN (${idList});`,
       `DELETE FROM production WHERE id IN (${idList});`,
+      ...(ciMode ? [ciGlobalDelete] : []),
       ``,
     ].join("\n");
 
-    // Restore circular FK columns after all rows are inserted
+    // ── Footer: restore circular FKs ─────────────────────────────────────────
     const prodRows = await client.query<{ id: string; active_version_id: string | null }>(
       `SELECT id, active_version_id FROM production WHERE id = ANY($1)`, [pids]
     );
@@ -300,16 +466,15 @@ async function main() {
       if (sets.length) restoreLines.push(`UPDATE tag_group SET ${sets.join(", ")} WHERE id = '${r.id}';`);
     }
     const footer = restoreLines.length
-      ? `\n-- Restore circular FK columns (deferred to after dependent tables are inserted)\n${restoreLines.join("\n")}\n`
+      ? `\n-- Restore circular FK columns\n${restoreLines.join("\n")}\n`
       : "";
 
-    const allSections = userSection ? userSection + "\n" + sectionsStr : sectionsStr;
-    const sql = header + allSections + footer;
+    const sql = header + sectionsStr + footer;
     const buf = Buffer.from(sql, "utf-8");
     const R2_KEY = ciMode ? "seed-data/ci.sql" : "seed-data/demo.sql";
     console.log(`Uploading to R2 bucket "${process.env.SEED_R2_BUCKET}": ${R2_KEY} (${(buf.byteLength / 1024 / 1024).toFixed(1)} MB)…`);
     await uploadSeed(R2_KEY, buf);
-    console.log(`Done. ${ciMode ? "CI can now use SEED_URL pointing to ci.sql" : "Testers can now run: npm run seed:demo"}`);
+    console.log(`Done. ${ciMode ? "CI seed uploaded — includes all tables, open_ids anonymized." : "Testers can now run: npm run seed:demo"}`);
   } finally {
     client.release();
     await pool.end();
