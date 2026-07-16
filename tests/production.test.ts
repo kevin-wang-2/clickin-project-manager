@@ -17,14 +17,14 @@ afterAll(() => deleteProduction(TEST_PROD_ID).catch(() => {}));
 
 describe("listProductions", () => {
   it("admin sees all seeded productions", async () => {
-    const list = await listProductions({ openId: TEST_USER, isAdmin: true });
+    const list = await listProductions({ userId: TEST_USER, isAdmin: true });
     const ids = list.map((p) => p.id);
     expect(ids).toContain(PROD_PLANET);
     expect(ids).toContain(PROD_CULTURE);
   });
 
   it("non-member sees no productions when not admin", async () => {
-    const list = await listProductions({ openId: TEST_USER, isAdmin: false });
+    const list = await listProductions({ userId: TEST_USER, isAdmin: false });
     expect(list.length).toBe(0);
   });
 });

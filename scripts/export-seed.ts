@@ -188,34 +188,65 @@ async function main() {
     const idList = pids.map((id) => `'${id}'`).join(", ");
     const vSubLit = `version_id IN (SELECT id FROM version WHERE production_id IN (${idList}))`;
 
-    // ── CI mode: anonymize feishu_user rows referenced by this seed ──────────
-    let feishuSection = "";
-    let feishuDelete = "";
-    let sectionsStr = sections.join("\n");
+    // ── Collect user UUIDs referenced by exported tables ─────────────────────
+    // cue_list.created_by → app_user.id is the only user FK in the exported table set.
+    const createdByRes = await client.query<{ created_by: string }>(
+      `SELECT DISTINCT created_by FROM cue_list WHERE production_id = ANY($1) AND created_by IS NOT NULL`,
+      [pids]
+    );
+    const userUuids: string[] = createdByRes.rows.map((r) => r.created_by);
 
-    if (ciMode) {
-      const createdByRes = await client.query<{ created_by: string }>(
-        `SELECT DISTINCT created_by FROM cue_list WHERE production_id = ANY($1) AND created_by IS NOT NULL`,
-        [pids]
+    let userSection = "";
+    let userDelete = "";
+    const sectionsStr = sections.join("\n");
+
+    if (userUuids.length > 0) {
+      // Fetch feishu_user rows for these app_user UUIDs
+      const fuRes = await client.query<{
+        open_id: string; user_id: string; name: string;
+        avatar_url: string | null; is_super_admin: boolean;
+      }>(
+        `SELECT fu.open_id, fu.user_id, fu.name, fu.avatar_url, fu.is_super_admin
+         FROM feishu_user fu WHERE fu.user_id = ANY($1::uuid[])`,
+        [userUuids]
       );
-      const openIdMap = new Map<string, string>();
-      createdByRes.rows.forEach((r, i) => openIdMap.set(r.created_by, `seed-user-${i + 1}`));
 
-      // Remap real open_ids → fake IDs across all sections before building the file
-      for (const [realId, fakeId] of openIdMap) {
-        sectionsStr = sectionsStr.replaceAll(realId, fakeId);
-      }
-
-      const fuLines = [`-- feishu_user (${openIdMap.size} rows, anonymized)`];
-      for (const [, fakeId] of openIdMap) {
-        const n = fakeId.split("-").pop();
-        fuLines.push(
-          `INSERT INTO "feishu_user" ("open_id", "name", "avatar_url", "is_super_admin", "created_at", "updated_at", "email", "phone") ` +
-          `VALUES ('${fakeId}', '演示用户${n}', NULL, FALSE, NOW(), NOW(), NULL, NULL) ON CONFLICT DO NOTHING;`
+      // app_user rows (id + created_at) — UUID is not PII
+      const auLines = [`-- app_user (${userUuids.length} rows)`];
+      for (const uuid of userUuids) {
+        auLines.push(
+          `INSERT INTO "app_user" ("id", "created_at") VALUES ('${uuid}', NOW()) ON CONFLICT DO NOTHING;`
         );
       }
-      feishuSection = fuLines.join("\n") + "\n";
-      feishuDelete = `DELETE FROM feishu_user WHERE open_id LIKE 'seed-user-%';\n`;
+
+      if (ciMode) {
+        // CI: anonymize open_id + name, null email/phone/avatar
+        const fuLines = [`-- feishu_user (${fuRes.rows.length} rows, anonymized)`];
+        fuRes.rows.forEach((row, i) => {
+          const fakeOpenId = `seed-user-${i + 1}`;
+          fuLines.push(
+            `INSERT INTO "feishu_user" ("open_id", "user_id", "name", "avatar_url", "is_super_admin", "created_at", "updated_at", "email", "phone") ` +
+            `VALUES ('${fakeOpenId}', '${row.user_id}', '演示用户${i + 1}', NULL, FALSE, NOW(), NOW(), NULL, NULL) ON CONFLICT DO NOTHING;`
+          );
+        });
+        userSection = auLines.join("\n") + "\n\n" + fuLines.join("\n") + "\n";
+        userDelete =
+          `DELETE FROM feishu_user WHERE open_id LIKE 'seed-user-%';\n` +
+          `DELETE FROM app_user WHERE id IN (${userUuids.map((u) => `'${u}'`).join(", ")});\n`;
+      } else {
+        // Demo: keep real open_id + name; null email/phone (PII)
+        const fuLines = [`-- feishu_user (${fuRes.rows.length} rows)`];
+        for (const row of fuRes.rows) {
+          const avatar = row.avatar_url ? `'${row.avatar_url.replace(/'/g, "''")}'` : "NULL";
+          fuLines.push(
+            `INSERT INTO "feishu_user" ("open_id", "user_id", "name", "avatar_url", "is_super_admin", "created_at", "updated_at", "email", "phone") ` +
+            `VALUES ('${row.open_id}', '${row.user_id}', '${row.name.replace(/'/g, "''")}', ${avatar}, ${row.is_super_admin}, NOW(), NOW(), NULL, NULL) ON CONFLICT DO NOTHING;`
+          );
+        }
+        userSection = auLines.join("\n") + "\n\n" + fuLines.join("\n") + "\n";
+        // Demo: user rows belong to real team members — do not delete them on cleanup
+        userDelete = "";
+      }
     }
 
     const schemaContent = readFileSync(path.join(process.cwd(), "db/schema.sql"));
@@ -238,7 +269,7 @@ async function main() {
       `DELETE FROM script WHERE production_id IN (${idList});`,
       `DELETE FROM cue WHERE cue_list_id IN (SELECT id FROM cue_list WHERE production_id IN (${idList}));`,
       `DELETE FROM cue_list WHERE production_id IN (${idList});`,
-      feishuDelete,
+      userDelete,
       `DELETE FROM tag_option WHERE group_id IN (SELECT id FROM tag_group WHERE production_id IN (${idList}));`,
       `DELETE FROM tag_group WHERE production_id IN (${idList});`,
       `DELETE FROM character_aggregate WHERE aggregate_id IN (SELECT id FROM character WHERE production_id IN (${idList}));`,
@@ -272,7 +303,7 @@ async function main() {
       ? `\n-- Restore circular FK columns (deferred to after dependent tables are inserted)\n${restoreLines.join("\n")}\n`
       : "";
 
-    const allSections = feishuSection ? feishuSection + "\n" + sectionsStr : sectionsStr;
+    const allSections = userSection ? userSection + "\n" + sectionsStr : sectionsStr;
     const sql = header + allSections + footer;
     const buf = Buffer.from(sql, "utf-8");
     const R2_KEY = ciMode ? "seed-data/ci.sql" : "seed-data/demo.sql";
