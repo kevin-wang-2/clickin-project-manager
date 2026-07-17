@@ -171,9 +171,9 @@ async function main() {
     // Map ALL feishu_users so every open_id reference anywhere in the SQL is covered.
     // In new schema, also capture user_id (UUID FK) so we can emit correct feishu_user rows.
     type UserRow = { open_id: string; name: string; user_id?: string };
-    let openIdMap = new Map<string, string>();    // real open_id → fake open_id
-    let nameToFakeId = new Map<string, string>(); // real name → fake open_id (for JSONB repair)
-    let userIdByOpenId = new Map<string, string>(); // real open_id → app_user UUID
+    const openIdMap = new Map<string, string>();    // real open_id → fake open_id
+    const nameToFakeId = new Map<string, string>(); // real name → fake open_id (for JSONB repair)
+    const userIdByOpenId = new Map<string, string>(); // real open_id → app_user UUID
     if (ciMode) {
       const cols = hasAppUser ? "open_id, name, user_id" : "open_id, name";
       const allUsers = await client.query<UserRow>(
