@@ -184,19 +184,6 @@ jobs:
         if: steps.migrations.outputs.has_migrations == 'true'
         run: npm run test:migration
 
-      # MIGRATION PATH: Export post-migration seed in new schema format and upload
-      # to R2 so future PRs start with data that matches the current schema.
-      - name: Upload post-migration CI seed
-        if: steps.migrations.outputs.has_migrations == 'true'
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.SEED_R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.SEED_R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.SEED_R2_SECRET_ACCESS_KEY }}
-          SEED_R2_BUCKET: ${{ secrets.SEED_R2_BUCKET }}
-        run: |
-          npm run seed:schema
-          npm run seed:ci-export -- "我们的星星" "供养2.0"
-
       - name: Verify seeded DB
         run: |
           FAIL=0
@@ -219,3 +206,16 @@ jobs:
       # ── Step 2: Unit tests ────────────────────────────────────────────────────
       - name: Run unit tests
         run: npm test
+
+      # MIGRATION PATH: Upload new seed only after ALL tests pass, so a partial
+      # failure never overwrites R2 with a seed that causes future CI hash mismatches.
+      - name: Upload post-migration CI seed
+        if: steps.migrations.outputs.has_migrations == 'true'
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.SEED_R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.SEED_R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.SEED_R2_SECRET_ACCESS_KEY }}
+          SEED_R2_BUCKET: ${{ secrets.SEED_R2_BUCKET }}
+        run: |
+          npm run seed:schema
+          npm run seed:ci-export -- "我们的星星" "供养2.0"

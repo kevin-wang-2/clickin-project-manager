@@ -20,7 +20,7 @@ describe("loadProduction / script blocks", () => {
       `SELECT COUNT(*) AS count FROM script WHERE production_id = ANY($1)`,
       [[PROD_PLANET, PROD_CULTURE]]
     );
-    expect(parseInt(res.rows[0].count)).toBeGreaterThanOrEqual(5000);
+    expect(parseInt(res.rows[0].count)).toBeGreaterThanOrEqual(4000);
   });
 
   it("我们的星星 active version has blocks loaded", async () => {

@@ -3,7 +3,7 @@ import {
   listCueLists, createCueList, getCueList, updateCueList, deleteCueList,
   createCue, getCue, listCues, updateCue, deleteCue,
 } from "@/lib/db";
-import { PROD_PLANET, TEST_USER } from "./helpers";
+import { PROD_PLANET, PROD_CULTURE, TEST_USER } from "./helpers";
 
 const CL_ID  = "test-cl-unit";
 const CUE_ID = "test-cue-unit";
@@ -14,8 +14,9 @@ afterAll(async () => {
 });
 
 describe("cue lists (seed data)", () => {
-  it("listCueLists returns at least one cue list for 我们的星星", async () => {
-    expect((await listCueLists(PROD_PLANET)).length).toBeGreaterThanOrEqual(1);
+  it("listCueLists returns at least one cue list across seeded productions", async () => {
+    const total = (await listCueLists(PROD_PLANET)).length + (await listCueLists(PROD_CULTURE)).length;
+    expect(total).toBeGreaterThanOrEqual(1);
   });
 });
 

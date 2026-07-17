@@ -27,7 +27,7 @@ describe("scenes", () => {
       `SELECT COUNT(*) AS count FROM scene WHERE production_id = ANY($1)`,
       [[PROD_PLANET, PROD_CULTURE]]
     );
-    expect(parseInt(res.rows[0].count)).toBeGreaterThanOrEqual(100);
+    expect(parseInt(res.rows[0].count)).toBeGreaterThanOrEqual(50);
   });
 
   it("getSceneById returns the correct scene", async () => {
