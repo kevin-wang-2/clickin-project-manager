@@ -17,24 +17,26 @@
  *   2. Integrity — FK orphan counts, JSONB cleanliness
  *   3. Invariance — every factory row maps faithfully before → after
  */
-import { describe, it, expect, beforeAll } from "vitest";
-import { readFile } from "fs/promises";
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
 import { getPool } from "@/lib/pg";
 import { SNAPSHOT_PATH, type PreMigrationSnapshot } from "./migration-snapshot";
 
 // ── Snapshot ──────────────────────────────────────────────────────────────────
-
+//
+// Read synchronously at module-load time so that it.skipIf(!snapshot) has the
+// correct value when test definitions are registered. An async beforeAll would
+// leave snapshot=null during registration, causing every it.skipIf to always
+// skip — even when the snapshot file exists.
+//
+// globalSetup runs before workers load this file, so the file is already on
+// disk (or absent) by the time this executes.
 let snapshot: PreMigrationSnapshot | null = null;
-
-beforeAll(async () => {
-  // global-setup.ts creates factory data, applies migration, and writes the
-  // snapshot before any test file runs. We just read it here.
-  try {
-    snapshot = JSON.parse(await readFile(SNAPSHOT_PATH, "utf8")) as PreMigrationSnapshot;
-  } catch {
-    snapshot = null; // already-migrated DB: invariance tests will skip
-  }
-}, 30_000);
+try {
+  snapshot = JSON.parse(readFileSync(SNAPSHOT_PATH, "utf8")) as PreMigrationSnapshot;
+} catch {
+  snapshot = null; // normal path: no snapshot (local already-migrated DB)
+}
 
 // ── 1. Schema verification ────────────────────────────────────────────────────
 
