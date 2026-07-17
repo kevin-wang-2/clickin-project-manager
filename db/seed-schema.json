@@ -447,6 +447,11 @@
       "nullable": false
     },
     {
+      "column": "abbr",
+      "type": "text",
+      "nullable": true
+    },
+    {
       "column": "notes",
       "type": "text",
       "nullable": false,
@@ -468,11 +473,6 @@
       "type": "timestamp with time zone",
       "nullable": false,
       "default": "now()"
-    },
-    {
-      "column": "abbr",
-      "type": "text",
-      "nullable": true
     },
     {
       "column": "created_by",
@@ -1007,6 +1007,16 @@
       "nullable": true
     },
     {
+      "column": "email",
+      "type": "text",
+      "nullable": true
+    },
+    {
+      "column": "phone",
+      "type": "text",
+      "nullable": true
+    },
+    {
       "column": "is_super_admin",
       "type": "boolean",
       "nullable": false,
@@ -1023,16 +1033,6 @@
       "type": "timestamp with time zone",
       "nullable": false,
       "default": "now()"
-    },
-    {
-      "column": "email",
-      "type": "text",
-      "nullable": true
-    },
-    {
-      "column": "phone",
-      "type": "text",
-      "nullable": true
     },
     {
       "column": "user_id",
@@ -1194,12 +1194,6 @@
       "nullable": false
     },
     {
-      "column": "added_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
       "column": "roles",
       "type": "ARRAY",
       "nullable": false,
@@ -1209,6 +1203,12 @@
       "column": "photo_url",
       "type": "text",
       "nullable": true
+    },
+    {
+      "column": "added_at",
+      "type": "timestamp with time zone",
+      "nullable": false,
+      "default": "now()"
     },
     {
       "column": "user_id",
@@ -1378,23 +1378,6 @@
       "default": "''::text"
     },
     {
-      "column": "created_at",
-      "type": "timestamp with time zone",
-      "nullable": false,
-      "default": "now()"
-    },
-    {
-      "column": "block_id",
-      "type": "text",
-      "nullable": false
-    },
-    {
-      "column": "force_show_character_name",
-      "type": "boolean",
-      "nullable": false,
-      "default": "false"
-    },
-    {
       "column": "stage_comment",
       "type": "text",
       "nullable": true
@@ -1404,6 +1387,23 @@
       "type": "jsonb",
       "nullable": false,
       "default": "'{}'::jsonb"
+    },
+    {
+      "column": "force_show_character_name",
+      "type": "boolean",
+      "nullable": false,
+      "default": "false"
+    },
+    {
+      "column": "created_at",
+      "type": "timestamp with time zone",
+      "nullable": false,
+      "default": "now()"
+    },
+    {
+      "column": "block_id",
+      "type": "text",
+      "nullable": false
     }
   ],
   "script_character": [

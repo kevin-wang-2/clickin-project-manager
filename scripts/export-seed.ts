@@ -161,18 +161,27 @@ async function main() {
     const idList = pids.map((id) => `'${id}'`).join(", ");
     console.log(`Exporting${ciMode ? " [CI mode]" : ""}: ${pidRes.rows.map((r) => `${r.name} (${r.id})`).join(", ")}`);
 
+    // ── Detect schema version at runtime ─────────────────────────────────────
+    // After `migrate-internal-user-id.sql` runs, `app_user` table exists.
+    const hasAppUser: boolean = await client
+      .query<{ exists: boolean }>("SELECT to_regclass('public.app_user') IS NOT NULL AS exists")
+      .then((r) => r.rows[0].exists);
+
     // ── Build open_id anonymization map (CI mode) ────────────────────────────
     // Map ALL feishu_users so every open_id reference anywhere in the SQL is covered.
-    let openIdMap = new Map<string, string>(); // real → fake
-    let nameMap = new Map<string, string>();   // real open_id → fake display name
+    // In new schema, also capture user_id (UUID FK) so we can emit correct feishu_user rows.
+    type UserRow = { open_id: string; name: string; user_id?: string };
+    let openIdMap = new Map<string, string>();    // real open_id → fake open_id
+    let userIdByOpenId = new Map<string, string>(); // real open_id → app_user UUID
     if (ciMode) {
-      const allUsers = await client.query<{ open_id: string; name: string }>(
-        "SELECT open_id, name FROM feishu_user ORDER BY open_id"
+      const cols = hasAppUser ? "open_id, name, user_id" : "open_id, name";
+      const allUsers = await client.query<UserRow>(
+        `SELECT ${cols} FROM feishu_user ORDER BY open_id`
       );
       allUsers.rows.forEach((r, i) => {
         const fakeId = `seed-user-${i + 1}`;
         openIdMap.set(r.open_id, fakeId);
-        nameMap.set(r.open_id, `演示用户${i + 1}`);
+        if (r.user_id) userIdByOpenId.set(r.open_id, r.user_id);
       });
     }
 
@@ -211,22 +220,41 @@ async function main() {
 
     // ── TIER 0: no FK deps ───────────────────────────────────────────────────
 
-    // feishu_user: CI only — export ALL users anonymized.
-    // Demo mode skips this (local DB already has real feishu_user rows).
+    // CI only: demo mode skips global tables (local DB already has real rows).
     if (ciMode) {
-      const lines = [`-- feishu_user (${openIdMap.size} rows, anonymized)`];
-      for (const [, fakeId] of openIdMap) {
-        const n = fakeId.split("-").pop();
-        lines.push(
-          `INSERT INTO "feishu_user" ("open_id","name","avatar_url","is_super_admin","created_at","updated_at","email","phone") ` +
-          `VALUES ('${fakeId}','演示用户${n}',NULL,FALSE,NOW(),NOW(),NULL,NULL) ON CONFLICT DO NOTHING;`
+      // app_user: new schema only — export all (just UUIDs, no PII)
+      if (hasAppUser) {
+        sections.push(
+          await exportTable(client, "app_user",
+            "id IN (SELECT user_id FROM feishu_user)", [])
         );
       }
-      sections.push(lines.join("\n") + "\n");
-    }
 
-    // bot_testers: CI only (global table, skip in demo to avoid clobbering real list)
-    if (ciMode) {
+      // feishu_user: export ALL users, anonymized
+      const lines = [`-- feishu_user (${openIdMap.size} rows, anonymized)`];
+      if (hasAppUser) {
+        // New schema: feishu_user has user_id FK to app_user
+        for (const [realId, fakeId] of openIdMap) {
+          const n = fakeId.split("-").pop();
+          const uid = userIdByOpenId.get(realId) ?? "";
+          lines.push(
+            `INSERT INTO "feishu_user" ("open_id","name","avatar_url","is_super_admin","created_at","updated_at","email","phone","user_id") ` +
+            `VALUES ('${fakeId}','演示用户${n}',NULL,FALSE,NOW(),NOW(),NULL,NULL,'${uid}') ON CONFLICT DO NOTHING;`
+          );
+        }
+      } else {
+        // Old schema: no user_id column
+        for (const [, fakeId] of openIdMap) {
+          const n = fakeId.split("-").pop();
+          lines.push(
+            `INSERT INTO "feishu_user" ("open_id","name","avatar_url","is_super_admin","created_at","updated_at","email","phone") ` +
+            `VALUES ('${fakeId}','演示用户${n}',NULL,FALSE,NOW(),NOW(),NULL,NULL) ON CONFLICT DO NOTHING;`
+          );
+        }
+      }
+      sections.push(lines.join("\n") + "\n");
+
+      // bot_testers: still uses open_id in both schemas (intentionally excluded from migration)
       await add("bot_testers", "TRUE", [], { ciNullCols: ["name"] });
     }
 
@@ -388,10 +416,19 @@ async function main() {
     // CI: delete seed rows only (identified by fake open_id prefix)
     // Demo: delete production-scoped rows only; global tables (feishu_user, bot_testers,
     //        notification_subscription) are left untouched so local data isn't clobbered.
+    //
+    // notification_subscription: old schema uses open_id PK; new schema uses user_id PK.
+    const notifSubDelete = hasAppUser
+      ? `DELETE FROM notification_subscription WHERE user_id IN (SELECT user_id FROM feishu_user WHERE open_id LIKE 'seed-user-%');`
+      : `DELETE FROM notification_subscription WHERE open_id LIKE 'seed-user-%';`;
+    const appUserDelete = hasAppUser
+      ? `DELETE FROM app_user WHERE id IN (SELECT user_id FROM feishu_user WHERE open_id LIKE 'seed-user-%');`
+      : `-- app_user: not present in old schema`;
     const ciGlobalDelete = [
-      `DELETE FROM notification_subscription WHERE open_id LIKE 'seed-user-%';`,
+      notifSubDelete,
       `DELETE FROM bot_testers WHERE open_id LIKE 'seed-user-%';`,
       `DELETE FROM feishu_user WHERE open_id LIKE 'seed-user-%';`,
+      appUserDelete,
     ].join("\n");
 
     const header = [
