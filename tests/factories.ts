@@ -59,22 +59,21 @@ export async function makeScene(
   opts?: { number?: string; name?: string },
 ): Promise<string> {
   const sceneId = randomUUID();
-  await flushToDBVersioned(productionId, versionId, {
-    upsertScenes: [
-      {
-        id: sceneId,
-        number: opts?.number ?? faker.number.int({ min: 1, max: 99 }).toString(),
-        name: opts?.name ?? faker.lorem.word(),
-        parentId: null,
-        sortOrder: 1,
-      },
-    ],
-    deleteSceneIds: [],
-    upsertBlocks: [],
-    deleteSnapshotIds: [],
-    upsertChars: [],
-    deleteCharIds: [],
-  });
+  const block: Block = {
+    id: sceneId,
+    type: "chapter_marker",
+    content: "",
+    characterIds: [],
+    characterAnnotations: {},
+    lyric: false,
+    sceneId: null,
+    rehearsalMark: null,
+    markerMeta: {
+      number: opts?.number ?? faker.number.int({ min: 1, max: 99 }).toString(),
+      name: opts?.name ?? faker.lorem.word(),
+    },
+  };
+  await applyPatchToDB(productionId, versionId, insOp(block));
   return sceneId;
 }
 
