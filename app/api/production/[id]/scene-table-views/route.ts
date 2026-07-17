@@ -12,7 +12,7 @@ type ViewConfig = {
 
 type ViewRow = {
   id: string;
-  open_id: string;
+  user_id: string;
   production_id: string;
   view_name: string;
   is_default: boolean;
@@ -31,11 +31,11 @@ export async function GET(req: NextRequest, ctx: RouteContext<"/api/production/[
 
   const pool = getPool();
   const res = await pool.query<ViewRow>(
-    `SELECT id, open_id, production_id, view_name, is_default, config, created_at, updated_at
+    `SELECT id, user_id, production_id, view_name, is_default, config, created_at, updated_at
      FROM scene_table_view_config
-     WHERE open_id = $1 AND production_id = $2
+     WHERE user_id = $1 AND production_id = $2
      ORDER BY is_default DESC, created_at ASC`,
-    [session.openId, id]
+    [session.userId, id]
   );
 
   const views = res.rows.map((row) => ({
@@ -76,18 +76,18 @@ export async function POST(req: NextRequest, ctx: RouteContext<"/api/production/
       await client.query(
         `UPDATE scene_table_view_config
          SET is_default = false, updated_at = NOW()
-         WHERE open_id = $1 AND production_id = $2`,
-        [session.openId, id]
+         WHERE user_id = $1 AND production_id = $2`,
+        [session.userId, id]
       );
     }
 
     const newId = randomUUID();
     const res = await client.query<ViewRow>(
       `INSERT INTO scene_table_view_config
-         (id, open_id, production_id, view_name, is_default, config)
+         (id, user_id, production_id, view_name, is_default, config)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, open_id, production_id, view_name, is_default, config, created_at, updated_at`,
-      [newId, session.openId, id, name, isDefault, JSON.stringify(config)]
+       RETURNING id, user_id, production_id, view_name, is_default, config, created_at, updated_at`,
+      [newId, session.userId, id, name, isDefault, JSON.stringify(config)]
     );
 
     await client.query("COMMIT");

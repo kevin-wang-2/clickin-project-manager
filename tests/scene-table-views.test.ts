@@ -1,7 +1,8 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { NextRequest } from "next/server";
 import { createSession, SESSION_COOKIE } from "@/lib/session";
-import { TEST_USER, PROD_PLANET } from "./helpers";
+import { TEST_USER } from "./helpers";
+import { makeProduction, cleanupProduction } from "./factories";
 
 import {
   GET as listViewsHandler,
@@ -18,11 +19,11 @@ import {
 // ── Session helpers ────────────────────────────────────────────────────────────
 
 function adminSession() {
-  return createSession({ openId: TEST_USER, name: "管理员", avatarUrl: null, isAdmin: true });
+  return createSession({ userId: TEST_USER, name: "管理员", avatarUrl: null, isAdmin: true });
 }
-// Another admin-level user — passes permission checks but different open_id.
+// Another admin-level user — passes permission checks but different user_id.
 function otherSession() {
-  return createSession({ openId: "other-test-user", name: "他人", avatarUrl: null, isAdmin: true });
+  return createSession({ userId: "00000000-0000-0000-0000-000000000002", name: "他人", avatarUrl: null, isAdmin: true });
 }
 
 function req(
@@ -43,17 +44,16 @@ function ctx(params: Record<string, string>): any {
   return { params: Promise.resolve(params) };
 }
 
-// ── Cleanup ────────────────────────────────────────────────────────────────────
+// ── Setup / Teardown ───────────────────────────────────────────────────────────
 
-const createdIds: string[] = [];
+let prodId: string;
+
+beforeAll(async () => {
+  ({ prodId } = await makeProduction());
+});
+
 afterAll(async () => {
-  const { getPool } = await import("@/lib/pg");
-  if (createdIds.length > 0) {
-    await getPool().query(
-      `DELETE FROM scene_table_view_config WHERE id = ANY($1)`,
-      [createdIds],
-    );
-  }
+  await cleanupProduction(prodId).catch(() => {});
 });
 
 // ── Auth guard ─────────────────────────────────────────────────────────────────
@@ -61,8 +61,8 @@ afterAll(async () => {
 describe("auth guard — GET /api/production/[id]/scene-table-views", () => {
   it("no cookie → 401", async () => {
     const res = await listViewsHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`),
-      ctx({ id: PROD_PLANET }),
+      req(`/api/production/${prodId}/scene-table-views`),
+      ctx({ id: prodId }),
     );
     expect(res.status).toBe(401);
   });
@@ -71,11 +71,11 @@ describe("auth guard — GET /api/production/[id]/scene-table-views", () => {
 describe("auth guard — POST /api/production/[id]/scene-table-views", () => {
   it("no cookie → 401", async () => {
     const res = await createViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, {
+      req(`/api/production/${prodId}/scene-table-views`, {
         method: "POST",
         body: JSON.stringify({ name: "test" }),
       }),
-      ctx({ id: PROD_PLANET }),
+      ctx({ id: prodId }),
     );
     expect(res.status).toBe(401);
   });
@@ -84,8 +84,8 @@ describe("auth guard — POST /api/production/[id]/scene-table-views", () => {
 describe("auth guard — PATCH /api/production/[id]/scene-table-views/[viewId]", () => {
   it("no cookie → 401", async () => {
     const res = await updateViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/nonexistent`, { method: "PATCH" }),
-      ctx({ id: PROD_PLANET, viewId: "nonexistent" }),
+      req(`/api/production/${prodId}/scene-table-views/nonexistent`, { method: "PATCH" }),
+      ctx({ id: prodId, viewId: "nonexistent" }),
     );
     expect(res.status).toBe(401);
   });
@@ -94,8 +94,8 @@ describe("auth guard — PATCH /api/production/[id]/scene-table-views/[viewId]",
 describe("auth guard — DELETE /api/production/[id]/scene-table-views/[viewId]", () => {
   it("no cookie → 401", async () => {
     const res = await deleteViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/nonexistent`, { method: "DELETE" }),
-      ctx({ id: PROD_PLANET, viewId: "nonexistent" }),
+      req(`/api/production/${prodId}/scene-table-views/nonexistent`, { method: "DELETE" }),
+      ctx({ id: prodId, viewId: "nonexistent" }),
     );
     expect(res.status).toBe(401);
   });
@@ -104,8 +104,8 @@ describe("auth guard — DELETE /api/production/[id]/scene-table-views/[viewId]"
 describe("auth guard — PATCH /api/production/[id]/scene-table-views/[viewId]/default", () => {
   it("no cookie → 401", async () => {
     const res = await setDefaultHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/nonexistent/default`, { method: "PATCH" }),
-      ctx({ id: PROD_PLANET, viewId: "nonexistent" }),
+      req(`/api/production/${prodId}/scene-table-views/nonexistent/default`, { method: "PATCH" }),
+      ctx({ id: prodId, viewId: "nonexistent" }),
     );
     expect(res.status).toBe(401);
   });
@@ -116,12 +116,12 @@ describe("auth guard — PATCH /api/production/[id]/scene-table-views/[viewId]/d
 describe("POST /api/production/[id]/scene-table-views — validation", () => {
   it("empty name → 400", async () => {
     const res = await createViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, {
+      req(`/api/production/${prodId}/scene-table-views`, {
         method: "POST",
         body: JSON.stringify({ name: "  " }),
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET }),
+      ctx({ id: prodId }),
     );
     expect(res.status).toBe(400);
   });
@@ -133,16 +133,9 @@ describe("scene-table-views CRUD happy path", () => {
   let viewId: string;
 
   it("GET returns empty list initially", async () => {
-    // Clean slate: delete any leftover views for TEST_USER on PROD_PLANET
-    const { getPool } = await import("@/lib/pg");
-    await getPool().query(
-      `DELETE FROM scene_table_view_config WHERE open_id = $1 AND production_id = $2`,
-      [TEST_USER, PROD_PLANET],
-    );
-
     const res = await listViewsHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, { session: adminSession() }),
-      ctx({ id: PROD_PLANET }),
+      req(`/api/production/${prodId}/scene-table-views`, { session: adminSession() }),
+      ctx({ id: prodId }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -151,7 +144,7 @@ describe("scene-table-views CRUD happy path", () => {
 
   it("POST creates a view", async () => {
     const res = await createViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, {
+      req(`/api/production/${prodId}/scene-table-views`, {
         method: "POST",
         body: JSON.stringify({
           name: "我的视图",
@@ -160,20 +153,19 @@ describe("scene-table-views CRUD happy path", () => {
         }),
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET }),
+      ctx({ id: prodId }),
     );
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.name).toBe("我的视图");
     expect(body.isDefault).toBe(false);
     viewId = body.id;
-    createdIds.push(viewId);
   });
 
   it("GET lists the created view", async () => {
     const res = await listViewsHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, { session: adminSession() }),
-      ctx({ id: PROD_PLANET }),
+      req(`/api/production/${prodId}/scene-table-views`, { session: adminSession() }),
+      ctx({ id: prodId }),
     );
     const body = await res.json();
     expect(body.views).toHaveLength(1);
@@ -182,12 +174,12 @@ describe("scene-table-views CRUD happy path", () => {
 
   it("PATCH updates name and config", async () => {
     const res = await updateViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${viewId}`, {
+      req(`/api/production/${prodId}/scene-table-views/${viewId}`, {
         method: "PATCH",
         body: JSON.stringify({ name: "改名后视图" }),
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId }),
+      ctx({ id: prodId, viewId }),
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -196,16 +188,16 @@ describe("scene-table-views CRUD happy path", () => {
 
   it("PATCH /default marks view as default", async () => {
     const res = await setDefaultHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${viewId}/default`, {
+      req(`/api/production/${prodId}/scene-table-views/${viewId}/default`, {
         method: "PATCH",
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId }),
+      ctx({ id: prodId, viewId }),
     );
     expect(res.status).toBe(200);
     const listed = await listViewsHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, { session: adminSession() }),
-      ctx({ id: PROD_PLANET }),
+      req(`/api/production/${prodId}/scene-table-views`, { session: adminSession() }),
+      ctx({ id: prodId }),
     );
     const listBody = await listed.json();
     expect(listBody.views[0].isDefault).toBe(true);
@@ -213,14 +205,13 @@ describe("scene-table-views CRUD happy path", () => {
 
   it("DELETE removes the view", async () => {
     const res = await deleteViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${viewId}`, {
+      req(`/api/production/${prodId}/scene-table-views/${viewId}`, {
         method: "DELETE",
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId }),
+      ctx({ id: prodId, viewId }),
     );
     expect(res.status).toBe(200);
-    createdIds.splice(createdIds.indexOf(viewId), 1);
   });
 });
 
@@ -231,48 +222,47 @@ describe("ownership guard — cannot modify another user's view", () => {
 
   it("setup: create view as TEST_USER", async () => {
     const res = await createViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views`, {
+      req(`/api/production/${prodId}/scene-table-views`, {
         method: "POST",
         body: JSON.stringify({ name: "他人视图", isDefault: false }),
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET }),
+      ctx({ id: prodId }),
     );
     const body = await res.json();
     ownedViewId = body.id;
-    createdIds.push(ownedViewId);
   });
 
   it("PATCH by other user → 403", async () => {
     const res = await updateViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${ownedViewId}`, {
+      req(`/api/production/${prodId}/scene-table-views/${ownedViewId}`, {
         method: "PATCH",
         body: JSON.stringify({ name: "偷改" }),
         session: otherSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: ownedViewId }),
+      ctx({ id: prodId, viewId: ownedViewId }),
     );
     expect(res.status).toBe(403);
   });
 
   it("DELETE by other user → 403", async () => {
     const res = await deleteViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${ownedViewId}`, {
+      req(`/api/production/${prodId}/scene-table-views/${ownedViewId}`, {
         method: "DELETE",
         session: otherSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: ownedViewId }),
+      ctx({ id: prodId, viewId: ownedViewId }),
     );
     expect(res.status).toBe(403);
   });
 
   it("PATCH /default by other user → 403", async () => {
     const res = await setDefaultHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/${ownedViewId}/default`, {
+      req(`/api/production/${prodId}/scene-table-views/${ownedViewId}/default`, {
         method: "PATCH",
         session: otherSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: ownedViewId }),
+      ctx({ id: prodId, viewId: ownedViewId }),
     );
     expect(res.status).toBe(403);
   });
@@ -283,34 +273,34 @@ describe("ownership guard — cannot modify another user's view", () => {
 describe("404 for non-existent view", () => {
   it("PATCH non-existent → 404", async () => {
     const res = await updateViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/stv_does_not_exist`, {
+      req(`/api/production/${prodId}/scene-table-views/stv_does_not_exist`, {
         method: "PATCH",
         body: JSON.stringify({ name: "x" }),
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: "stv_does_not_exist" }),
+      ctx({ id: prodId, viewId: "stv_does_not_exist" }),
     );
     expect(res.status).toBe(404);
   });
 
   it("DELETE non-existent → 404", async () => {
     const res = await deleteViewHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/stv_does_not_exist`, {
+      req(`/api/production/${prodId}/scene-table-views/stv_does_not_exist`, {
         method: "DELETE",
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: "stv_does_not_exist" }),
+      ctx({ id: prodId, viewId: "stv_does_not_exist" }),
     );
     expect(res.status).toBe(404);
   });
 
   it("PATCH /default non-existent → 404", async () => {
     const res = await setDefaultHandler(
-      req(`/api/production/${PROD_PLANET}/scene-table-views/stv_does_not_exist/default`, {
+      req(`/api/production/${prodId}/scene-table-views/stv_does_not_exist/default`, {
         method: "PATCH",
         session: adminSession(),
       }),
-      ctx({ id: PROD_PLANET, viewId: "stv_does_not_exist" }),
+      ctx({ id: prodId, viewId: "stv_does_not_exist" }),
     );
     expect(res.status).toBe(404);
   });

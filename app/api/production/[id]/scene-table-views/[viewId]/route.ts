@@ -36,22 +36,22 @@ export async function PATCH(
   }
 
   sets.push(`updated_at = NOW()`);
-  values.push(viewId, id, session.openId);
+  values.push(viewId, id, session.userId);
 
   const pool = getPool();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const existing = await client.query<{ open_id: string }>(
-      `SELECT open_id FROM scene_table_view_config WHERE id = $1 AND production_id = $2 FOR UPDATE`,
+    const existing = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM scene_table_view_config WHERE id = $1 AND production_id = $2 FOR UPDATE`,
       [viewId, id]
     );
     if (existing.rowCount === 0) {
       await client.query("ROLLBACK");
       return Response.json({ error: "视图不存在" }, { status: 404 });
     }
-    if (existing.rows[0].open_id !== session.openId) {
+    if (existing.rows[0].user_id !== session.userId) {
       await client.query("ROLLBACK");
       return Response.json({ error: "无权修改他人视图" }, { status: 403 });
     }
@@ -66,7 +66,7 @@ export async function PATCH(
     }>(
       `UPDATE scene_table_view_config
        SET ${sets.join(", ")}
-       WHERE id = $${paramIdx} AND production_id = $${paramIdx + 1} AND open_id = $${paramIdx + 2}
+       WHERE id = $${paramIdx} AND production_id = $${paramIdx + 1} AND user_id = $${paramIdx + 2}
        RETURNING id, view_name, is_default, config, created_at, updated_at`,
       values
     );
@@ -106,22 +106,22 @@ export async function DELETE(
   try {
     await client.query("BEGIN");
 
-    const existing = await client.query<{ open_id: string }>(
-      `SELECT open_id FROM scene_table_view_config WHERE id = $1 AND production_id = $2 FOR UPDATE`,
+    const existing = await client.query<{ user_id: string }>(
+      `SELECT user_id FROM scene_table_view_config WHERE id = $1 AND production_id = $2 FOR UPDATE`,
       [viewId, id]
     );
     if (existing.rowCount === 0) {
       await client.query("ROLLBACK");
       return Response.json({ error: "视图不存在" }, { status: 404 });
     }
-    if (existing.rows[0].open_id !== session.openId) {
+    if (existing.rows[0].user_id !== session.userId) {
       await client.query("ROLLBACK");
       return Response.json({ error: "无权删除他人视图" }, { status: 403 });
     }
 
     await client.query(
-      `DELETE FROM scene_table_view_config WHERE id = $1 AND production_id = $2 AND open_id = $3`,
-      [viewId, id, session.openId]
+      `DELETE FROM scene_table_view_config WHERE id = $1 AND production_id = $2 AND user_id = $3`,
+      [viewId, id, session.userId]
     );
 
     await client.query("COMMIT");
