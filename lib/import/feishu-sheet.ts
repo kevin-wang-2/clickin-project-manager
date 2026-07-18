@@ -75,7 +75,7 @@ export async function getSheetValues(
     const pt = Date.now();
 
     const data = await feishuGet<{
-      data: { valueRange: { values?: (string | number | boolean | null)[][] } };
+      data: { valueRange: { values?: unknown[][] } };
     }>(
       `/sheets/v2/spreadsheets/${spreadsheetToken}/values/${encodeURIComponent(range)}`,
       userToken,
@@ -84,7 +84,7 @@ export async function getSheetValues(
 
     const rows = data.data.valueRange.values ?? [];
     console.log(`[feishu-sheet] page ${page + 1}: got ${rows.length} rows in ${Date.now() - pt}ms`);
-    allRows.push(...rows.map(row => row.map(cell => (cell == null ? "" : String(cell)))));
+    allRows.push(...rows.map(row => row.map(cellToString)));
 
     if (rows.length < PAGE_SIZE || (maxRow && end >= maxRow)) break;
     start += PAGE_SIZE;
@@ -113,6 +113,17 @@ export function parseSheetData(rawRows: string[][]): SheetData {
   );
 
   return { headers, rows, rawHeaders: rawHeader.map(c => c.trim() || null) };
+}
+
+/** Convert a raw Feishu cell value to a plain string.
+ *  Cells may be primitives or rich-text arrays of {text:string} objects. */
+function cellToString(cell: unknown): string {
+  if (cell == null) return "";
+  if (typeof cell === "string") return cell;
+  if (typeof cell === "number" || typeof cell === "boolean") return String(cell);
+  if (Array.isArray(cell)) return (cell as { text?: string }[]).map(s => s.text ?? "").join("");
+  if (typeof cell === "object") return (cell as Record<string, unknown>).text as string ?? "";
+  return String(cell);
 }
 
 function colLetter(idx: number): string {
