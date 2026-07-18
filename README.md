@@ -23,18 +23,15 @@
 ### 1. PostgreSQL
 
 ```bash
-# 创建主库用户和数据库
-sudo -u postgres psql <<'EOF'
-CREATE USER script_editor WITH PASSWORD 'your-password';
-CREATE DATABASE script_editor OWNER script_editor;
-EOF
+# macOS（Homebrew）— 当前 OS 用户直接创建，无需密码
+createdb script_editor
+psql -d script_editor -f db/schema.sql
 
-# 初始化 schema
-sudo -u postgres psql -d script_editor -f db/schema.sql
-
-# 创建 Agent Bot 数据库（可选，仅 Bot 功能需要）
-sudo -u postgres psql -f db/setup-agent-db.sql
+# Agent Bot 数据库（可选，仅 Bot 功能需要）
+psql -f db/setup-agent-db.sql
 ```
+
+> Linux / Docker 环境：`sudo -u postgres psql` 执行上述命令，并按 `db/setup-agent-db.sql` 中注释修改密码。
 
 ### 2. 飞书应用
 
@@ -80,12 +77,14 @@ FEISHU_APP_ID=cli_xxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxx
 FEISHU_REDIRECT_URI=http://127.0.0.1:3000/app/api/oath-callback
 
-PGHOST=localhost
-PGDATABASE=script_editor
-PGUSER=script_editor
-PGPASSWORD=your-password
-
 SESSION_SECRET=any-random-string        # 生产环境必须设置；本地开发可留空（有警告）
+
+# ── 数据库（主库）── macOS 本地开发通常无需设置（使用系统用户 peer auth）─────
+# Linux / Docker 环境或需要密码时取消注释：
+# PGHOST=localhost
+# PGDATABASE=script_editor
+# PGUSER=your-os-username
+# PGPASSWORD=your-password
 
 # ── 文件上传（使用资产/文件功能时必填）──────────────────────────────────────
 R2_ACCOUNT_ID=xxxxxxxx
@@ -96,8 +95,7 @@ R2_BUCKET=click-in-test                 # 本地建议用独立测试 bucket
 # ── 群机器人 / 定时通知（启用 Bot 功能时必填）──────────────────────────────
 AGENT_PGHOST=localhost
 AGENT_PGDATABASE=click_in_agent
-AGENT_PGUSER=agent_user
-AGENT_PGPASSWORD=your-agent-password
+AGENT_PGUSER=your-os-username           # macOS peer auth：填入 OS 用户名，不需要 AGENT_PGPASSWORD
 
 LLM_PROVIDER=openai                     # openai（默认）或 deepseek
 OPENAI_API_KEY=sk-xxxxxxxx

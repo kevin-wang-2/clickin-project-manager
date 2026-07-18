@@ -200,7 +200,7 @@ describe("schema fingerprint matches committed seed-schema.json", () => {
     // Tables in actual but not in committed (added — need seed re-export)
     for (const table of Object.keys(actual)) {
       if (!committed[table]) {
-        diffs.push(`TABLE ADDED (re-export seed): ${table}`);
+        diffs.push(`TABLE ADDED (run: npm run seed:schema): ${table}`);
       }
     }
 
@@ -223,7 +223,7 @@ describe("schema fingerprint matches committed seed-schema.json", () => {
       }
       for (const col of actualCols.keys()) {
         if (!committedCols.has(col)) {
-          diffs.push(`${table}.${col}: COLUMN ADDED (re-export seed)`);
+          diffs.push(`${table}.${col}: COLUMN ADDED (run: npm run seed:schema)`);
         }
       }
     }
