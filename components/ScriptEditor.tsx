@@ -25,7 +25,13 @@ import { DEFAULT_SCRIPT_CONFIG } from "@/lib/script-types";
 import { getChapterDurationDisplay } from "@/lib/scene-duration";
 import { diffState, type TagEntry } from "@/lib/script-ops";
 import { convertMarker, executeMarkerDeletion, getMarkerChange, insertMarker, markerCacheUpdateBlockIds, normalizeScriptMarkerInvariants as normalizeSharedMarkerInvariants, planMarkerDeletion, type BlockChange, type MarkerChange, type MarkerDeleteOperation } from "@/lib/script-marker-domain";
-import MarkerDeleteDialog, { type MarkerDeleteDialogState } from "@/components/MarkerDeleteDialog";
+import MarkerDeleteDialog, {
+  type MarkerDeleteDialogState,
+} from "@/components/MarkerDeleteDialog";
+import ScriptDialog, {
+  SCRIPT_CONFIRM_CANCEL_BUTTON_CLASS,
+  SCRIPT_CONFIRM_PRIMARY_BUTTON_CLASS,
+} from "@/components/ScriptDialog";
 import { COMPACT_TEXT_SIDE_WIDTH_REM, PAGE_CONFIGS, updateEstimatedPageMap } from "@/lib/script-page";
 import type { EstimatedPageMapCache, PageConfig } from "@/lib/script-page";
 import SmartTextarea from "@/components/SmartTextarea";
@@ -11858,14 +11864,10 @@ export default function ScriptEditor({
       )}
 
       {pendingLockedMode !== null && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setPendingLockedMode(null)}
+        <ScriptDialog
+          onClose={() => setPendingLockedMode(null)}
+          panelClassName="w-[360px] rounded-2xl bg-white p-5 shadow-xl"
         >
-          <div
-            className="w-[360px] rounded-2xl bg-white p-5 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
             <h2 className="text-base font-semibold text-zinc-800">
               {pendingLockedMode ? "确认进入排练模式？" : "确认退出排练模式？"}
             </h2>
@@ -11888,8 +11890,7 @@ export default function ScriptEditor({
                 确认
               </button>
             </div>
-          </div>
-        </div>
+        </ScriptDialog>
       )}
 
       {pendingAggregateFocusPrompt && (() => {
@@ -11899,16 +11900,10 @@ export default function ScriptEditor({
           .filter((char): char is Character => Boolean(char));
         if (!currentCharacter || aggregateCharacters.length === 0) return null;
         return (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-            onClick={cancelAggregateFocusPrompt}
-            role="dialog"
-            aria-modal="true"
+          <ScriptDialog
+            onClose={cancelAggregateFocusPrompt}
+            panelClassName="w-[420px] rounded-2xl bg-white p-5 shadow-xl"
           >
-            <div
-              className="w-[420px] rounded-2xl bg-white p-5 shadow-xl"
-              onClick={e => e.stopPropagation()}
-            >
               <h2 className="text-base font-semibold text-zinc-800">
                 是否同时聚焦以下包含该角色的聚合角色？
               </h2>
@@ -11953,8 +11948,7 @@ export default function ScriptEditor({
                   </button>
                 </div>
               </div>
-            </div>
-          </div>
+          </ScriptDialog>
         );
       })()}
 
@@ -11978,32 +11972,25 @@ export default function ScriptEditor({
       )}
 
       {markerDetailDeleteBlockedKind && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setMarkerDetailDeleteBlockedKind(null)}
-          role="dialog"
-          aria-modal="true"
+        <ScriptDialog
+          onClose={() => setMarkerDetailDeleteBlockedKind(null)}
+          panelClassName="w-[380px] rounded-2xl bg-white p-5 shadow-xl"
         >
-          <div
-            className="w-[380px] rounded-2xl bg-white p-5 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <h2 className="text-base font-semibold text-zinc-800">
-              不可删除该{markerDetailDeleteBlockedKind === "chapter" ? "章节" : "段落"}
-            </h2>
-            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-zinc-500">
-              {sceneDetailDeleteBlockedMessage(markerDetailDeleteBlockedKind)}
-            </p>
-            <div className="mt-5 flex justify-end">
-              <button
-                onClick={() => setMarkerDetailDeleteBlockedKind(null)}
-                className="rounded bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
-              >
-                确认
-              </button>
-            </div>
+          <h2 className="text-base font-semibold text-zinc-800">
+            不可删除该{markerDetailDeleteBlockedKind === "chapter" ? "章节" : "段落"}
+          </h2>
+          <p className="mt-2 whitespace-pre-line text-sm leading-6 text-zinc-500">
+            {sceneDetailDeleteBlockedMessage(markerDetailDeleteBlockedKind)}
+          </p>
+          <div className="mt-5 flex justify-end">
+            <button
+              onClick={() => setMarkerDetailDeleteBlockedKind(null)}
+              className="rounded bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700"
+            >
+              确认
+            </button>
           </div>
-        </div>
+        </ScriptDialog>
       )}
 
       {pendingNonEmptyMarkerSelectionDeleteIds && (() => {
@@ -12091,19 +12078,13 @@ export default function ScriptEditor({
       })()}
 
       {pendingLargeSelectionConfirmation && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => {
+        <ScriptDialog
+          onClose={() => {
             pendingLargeSelectionConfirmation.onCancel?.();
             setPendingLargeSelectionConfirmation(null);
           }}
-          role="dialog"
-          aria-modal="true"
+          panelClassName="w-[380px] rounded-2xl bg-white p-5 shadow-xl"
         >
-          <div
-            className="w-[380px] rounded-2xl bg-white p-5 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
             <h2 className="text-base font-semibold text-zinc-800">确认继续操作？</h2>
             <p className="mt-2 whitespace-pre-line text-sm leading-6 text-zinc-500">
               {largeSelectionOperationMessage(
@@ -12133,21 +12114,14 @@ export default function ScriptEditor({
                 确认
               </button>
             </div>
-          </div>
-        </div>
+        </ScriptDialog>
       )}
 
       {pendingEmptyScriptCleanup && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setEmptyScriptCleanupDialog(null)}
-          role="dialog"
-          aria-modal="true"
+        <ScriptDialog
+          onClose={() => setEmptyScriptCleanupDialog(null)}
+          panelClassName="w-[560px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-5 shadow-xl"
         >
-          <div
-            className="w-[560px] max-w-[calc(100vw-2rem)] rounded-2xl bg-white p-5 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
             <h2 className="text-base font-semibold text-zinc-800">确认清除空白内容？</h2>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
               以下章节、段落和排练记号 仅包含空剧本块 或 不包含任何剧本块，可选择移除。
@@ -12258,36 +12232,27 @@ export default function ScriptEditor({
             <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
               <button
                 onClick={() => setEmptyScriptCleanupDialog(null)}
-                className="rounded border border-zinc-200 px-3 py-1.5 text-sm text-zinc-500 hover:border-zinc-300 hover:text-zinc-700"
+                className={SCRIPT_CONFIRM_CANCEL_BUTTON_CLASS}
               >
                 取消
               </button>
               <button
                 onClick={() => applyEmptyScriptCleanup(selectedEmptyScriptCleanupKeys)}
-                className={`rounded px-3 py-1.5 text-sm font-medium text-white transition-colors ${
-                  selectedEmptyScriptCleanupKeys.size === 0
-                    ? "bg-[#637ca1] hover:bg-[#536b8e]"
-                    : "bg-zinc-900 hover:bg-zinc-800"
-                }`}
+                className={selectedEmptyScriptCleanupKeys.size === 0
+                  ? "rounded bg-[#637ca1] px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-[#536b8e]"
+                  : "rounded bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700"}
               >
                 {selectedEmptyScriptCleanupKeys.size === 0 ? "仅清除空白剧本块" : "清除选中空白内容"}
               </button>
             </div>
-          </div>
-        </div>
+        </ScriptDialog>
       )}
 
       {pendingStageDelimiterChange && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setPendingStageDelimiterChange(null)}
-          role="dialog"
-          aria-modal="true"
+        <ScriptDialog
+          onClose={() => setPendingStageDelimiterChange(null)}
+          panelClassName="w-[420px] rounded-2xl bg-white p-5 shadow-xl"
         >
-          <div
-            className="w-[420px] rounded-2xl bg-white p-5 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
             <h2 className="text-base font-semibold text-zinc-800">确认切换段内舞台提示括号？</h2>
             <p className="mt-2 text-sm leading-6 text-zinc-500">
               切换括号后，剧本中原本由 “
@@ -12322,20 +12287,15 @@ export default function ScriptEditor({
                 确认更新
               </button>
             </div>
-          </div>
-        </div>
+        </ScriptDialog>
       )}
 
       {/* 关于 modal */}
       {aboutOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setAboutOpen(false)}
+        <ScriptDialog
+          onClose={() => setAboutOpen(false)}
+          panelClassName="w-[420px] rounded-2xl bg-white p-6 shadow-xl"
         >
-          <div
-            className="w-[420px] rounded-2xl bg-white p-6 shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-base font-semibold text-zinc-800">关于 · 快捷键</h2>
               <button onClick={() => setAboutOpen(false)} className="text-zinc-300 hover:text-zinc-500 text-lg leading-none">✕</button>
@@ -12363,8 +12323,7 @@ export default function ScriptEditor({
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
+        </ScriptDialog>
       )}
     </div>
   );
