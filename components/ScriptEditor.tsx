@@ -64,6 +64,7 @@ const MARKER_CONTROL_DELETE_LEFT_PX = 0;
 const MARKER_CONTROL_BAR_LEFT_PX = 12;
 const MARKER_CONTROL_TRIANGLE_LEFT_PX = MARKER_CONTROL_BAR_LEFT_PX * 2 - MARKER_CONTROL_DELETE_LEFT_PX + 1;
 const MARKER_CONTROL_TRIANGLE_TOP_OFFSET_PX = 0.6;
+const MARKER_DIVIDER_RIGHT_MARGIN = 0.2;
 let scriptTocMeasureElement: HTMLSpanElement | null = null;
 let scriptTocMeasureCache: {
   scenes: Scene[];
@@ -1734,7 +1735,8 @@ function ScriptMarkerRow({
   }, [dismissToken]);
   const isRehearsal = node.kind === "rehearsal";
   const markerRootStyle: React.CSSProperties | undefined = lineIndexWidth
-    ? { paddingLeft: `calc(${lineIndexWidth} + ${LINE_INDEX_GUTTER_OFFSET_REM}rem)` }
+    ? { paddingLeft: `calc(${lineIndexWidth} + ${LINE_INDEX_GUTTER_OFFSET_REM}rem)`,
+        marginRight: `${MARKER_DIVIDER_RIGHT_MARGIN}rem` }
     : undefined;
   const rehearsalMarkerStyle: React.CSSProperties | undefined = isRehearsal
     ? { height: `max(${REHEARSAL_MARKER_ROW_MIN_HEIGHT_PX}px, ${REHEARSAL_MARKER_ROW_BASE_HEIGHT_REM * REHEARSAL_MARKER_ROW_HEIGHT_SCALE}rem)` }
