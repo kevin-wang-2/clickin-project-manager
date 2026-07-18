@@ -93,10 +93,10 @@ R2_ACCESS_KEY_ID=xxxxxxxx
 R2_SECRET_ACCESS_KEY=xxxxxxxx
 R2_BUCKET=click-in-test                 # 本地建议用独立测试 bucket
 
-# ── 群机器人 / 定时通知（启用 Bot 功能时必填）──────────────────────────────
-AGENT_PGHOST=localhost
-AGENT_PGDATABASE=click_in_agent
-AGENT_PGUSER=your-os-username           # macOS peer auth：填入 OS 用户名，不需要 AGENT_PGPASSWORD
+# ── 群机器人 / 定时通知（启用 Bot 功能时必填；无默认值，需显式填写）────────
+# AGENT_PGHOST=localhost
+# AGENT_PGDATABASE=click_in_agent
+# AGENT_PGUSER=your-os-username         # macOS peer auth：填入 OS 用户名，不需要 AGENT_PGPASSWORD
 
 LLM_PROVIDER=openai                     # openai（默认）或 deepseek
 OPENAI_API_KEY=sk-xxxxxxxx
