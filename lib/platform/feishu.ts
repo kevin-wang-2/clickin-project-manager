@@ -369,9 +369,10 @@ export class FeishuPlatform implements PersonalChannel, OrgChannel, InboundGatew
 
   // ── InboundGateway ────────────────────────────────────────────────────────
 
-  // Feishu doesn't require signature verification in the current setup.
-  // Future: check X-Lark-Signature with HMAC-SHA256 of the Encrypt Key.
-  verifyRequest(_payload: unknown, _headers: Record<string, string>): boolean {
+  verifyRequest(payload: unknown, _headers: Record<string, string>): boolean {
+    // url_verification handshake carries no signing headers — always allow through.
+    if ((payload as Record<string, unknown>).type === "url_verification") return true;
+    // Future: check X-Lark-Signature with HMAC-SHA256 of the Encrypt Key.
     return true;
   }
 
