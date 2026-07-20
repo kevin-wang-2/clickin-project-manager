@@ -235,8 +235,12 @@ const AtMentionExt = Mention.extend({
   addStorage() {
     return {
       markdown: {
-        serialize(state: { write: (s: string) => void }, node: { attrs: { label: string } }) {
-          state.write(`@${node.attrs.label}`);
+        serialize(state: { write: (s: string) => void }, node: { attrs: { id: string | null; label: string } }) {
+          if (node.attrs.id) {
+            state.write(`@[${node.attrs.label}](uid:${node.attrs.id})`);
+          } else {
+            state.write(`@${node.attrs.label}`);
+          }
         },
       },
     };
@@ -255,15 +259,16 @@ function serializeDoc(editor: ReturnType<typeof useEditor>): string {
         const { kind, displayMode, id, aux, versionId } = node.attrs as ContentMentionAttrs;
         return serializeMention({ kind, displayMode, id, aux, versionId });
       },
-      atMention: ({ node }) => `@${node.attrs.label}`,
+      atMention: ({ node }) => node.attrs.id ? `@[${node.attrs.label}](uid:${node.attrs.id})` : `@${node.attrs.label}`,
     },
   });
 }
 
 function parseLine(line: string): JSONContent[] {
   const CMENTION = String.raw`\[#[^\]\n]*\](?:\([^\s)"]+(?:\s+"[^"]*")?\))?`;
+  const AT_WITH_ID = String.raw`@\[[^\]]+\]\(uid:[^)]+\)`;
   const AT = String.raw`@[\w一-鿿]+`;
-  const parts = line.split(new RegExp(`(${CMENTION}|${AT})`));
+  const parts = line.split(new RegExp(`(${CMENTION}|${AT_WITH_ID}|${AT})`));
   const nodes: JSONContent[] = [];
   for (const part of parts) {
     if (!part) continue;
@@ -282,8 +287,10 @@ function parseLine(line: string): JSONContent[] {
       nodes.push({ type: "text", text: `#${label}` });
       continue;
     }
+    const amWithId = part.match(/^@\[([^\]]+)\]\(uid:([^)]+)\)$/);
+    if (amWithId) { nodes.push({ type: "atMention", attrs: { id: amWithId[2], label: amWithId[1] } }); continue; }
     const am = part.match(/^@([\w一-鿿]+)$/);
-    if (am) { nodes.push({ type: "atMention", attrs: { id: am[1], label: am[1] } }); continue; }
+    if (am) { nodes.push({ type: "atMention", attrs: { id: null, label: am[1] } }); continue; }
     nodes.push({ type: "text", text: part });
   }
   return nodes;
