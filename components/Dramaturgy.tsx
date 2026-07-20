@@ -128,9 +128,6 @@ export default function Dramaturgy({
 
   const handleConfigChange = (config: TableViewConfigData) => {
     setTableConfig(config);
-    if (activeViewId) {
-      setActiveViewId(null);
-    }
   };
 
   const handleSelectView = (view: SavedView) => {
